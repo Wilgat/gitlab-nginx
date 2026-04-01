@@ -9,13 +9,13 @@ Perfect for production deployments where you want full control over Nginx (e.g. 
 
 ## ✨ One-Command Installation
 
-Run this single command as root (or with `sudo`):
+Run this single command as root (or with `sudo`) for the first basic setup:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sudo bash
 ```
 
-After installation, you can simply run:
+Then you need to run in interactive mode for the final setup, you can simply run:
 
 ```bash
 sudo gitlab-nginx

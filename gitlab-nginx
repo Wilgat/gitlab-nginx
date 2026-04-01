@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================================
 # GitLab + External Nginx + Let's Encrypt Setup Script
-# Version: 1.28
+# Version: 1.29
 #
 # Self-installing (root-only) — inspired by springboot2 pattern
 # Must be run with sudo / as root. Installs to /usr/local/bin/gitlab-nginx
@@ -10,7 +10,7 @@
 set -e
 
 APP_NAME="gitlab-nginx"
-SCRIPT_VERSION="1.28"
+SCRIPT_VERSION="1.29"
 REPO_USER="Wilgat"
 REPO_NAME="gitlab-nginx"
 
@@ -720,7 +720,7 @@ case "$1" in
     gitlab_config
     ;;
   --setup)
-    run_full_setup ;;
+    run_full_setup
     ;;
   --force-reinstall)
     check_root
