@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================================
 # GitLab + External Nginx + Let's Encrypt Setup Script
-# Version: 1.29
+# Version: 1.30
 #
 # Self-installing (root-only) — inspired by springboot2 pattern
 # Must be run with sudo / as root. Installs to /usr/local/bin/gitlab-nginx
@@ -10,7 +10,7 @@
 set -e
 
 APP_NAME="gitlab-nginx"
-SCRIPT_VERSION="1.29"
+SCRIPT_VERSION="1.30"
 REPO_USER="Wilgat"
 REPO_NAME="gitlab-nginx"
 
@@ -25,28 +25,23 @@ INSTALL_PATH="${GLOBAL_BIN}/${APP_NAME}"
 # ======================
 
 STEP=1
+TTY=0
 if [ -t 1 ]; then
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
     RED='\033[0;31m'
     NC='\033[0m'
-    TTY=1
 else
     GREEN='' YELLOW='' RED='' NC=''
-    TTY=0   # when using: 
-            # curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sudo bash
 fi
 
+[ -t 0 ] && [ -t 1 ] && TTY=1
 info()  { printf "${GREEN}→ %s${NC}\n" "$*" >&2; }
 warn()  { printf "${YELLOW}⚠  %s${NC}\n" "$*" >&2; }
 debug() { printf "${YELLOW}[DEBUG] %s${NC}\n" "$*" >&2; }
 die() {
     printf >&2 "${RED}Error: %s${NC}\n" "$*"
     exit 1
-}
-
-is_interactive() {
-    [ -t 0 ] && [ -t 1 ]   # stdin and stdout are terminals
 }
 
 step_message() {
@@ -202,7 +197,8 @@ save_domains_to_file() {
 #  - Require TTY, cannot run under curl and after pipeline |
 # ======================
 ask_and_confirm_domains() {
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
   local domains="$1"
@@ -270,7 +266,8 @@ install_certbot() {
 #  - Require TTY, cannot run under curl and after pipeline |
 # ======================
 get_or_set_email() {
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
   step_message "Configuring Let's Encrypt email"
@@ -336,7 +333,8 @@ apply_letsencrypt_standalone() {
 #  - Require TTY, cannot run under curl and after pipeline |
 # ======================
 install_gitlab_ce() {
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
   step_message "Installing GitLab CE (if needed)"
@@ -357,7 +355,8 @@ install_gitlab_ce() {
 #  - Require TTY, cannot run under curl and after pipeline |
 # ======================
 get_main_domain() {
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
 
@@ -403,7 +402,8 @@ get_main_domain() {
 #  - Require TTY, cannot run under curl and after pipeline |
 # ======================
 ask_gitlab_ssh_host() {
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
 
@@ -614,7 +614,8 @@ EOF
 run_full_setup() {
   check_root
   run_basic_setup
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
   debug "=== Starting domain loading phase ==="
@@ -677,15 +678,17 @@ run_basic_setup() {
 }
 
 check_tty_setup() {
-  if is_interactive; then
-    run_full_setup
-  else
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     run_basic_setup
+  else
+    run_full_setup
   fi
 }
 
 gitlab_config() {
-  if ! is_interactive; then
+  if [ "$TTY" = "0" ]; then
+    debug "Non interactive mode"
     return 0
   fi
   check_root
