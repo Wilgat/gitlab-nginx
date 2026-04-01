@@ -1,0 +1,626 @@
+#!/bin/sh
+# =============================================================================
+# GitLab + External Nginx + Let's Encrypt Setup Script
+# Version: 1.23
+#
+# Self-installing (root-only) — inspired by springboot2 pattern
+# Must be run with sudo / as root. Installs to /usr/local/bin/gitlab-nginx
+# =============================================================================
+
+set -e
+
+APP_NAME="gitlab-nginx"
+SCRIPT_VERSION="1.23"
+REPO_USER="Wilgat"
+REPO_NAME="gitlab-nginx"
+
+# ← CHANGE THIS TO YOUR ACTUAL RAW URL (GitHub, GitLab raw, or your hosting)
+REPO_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${APP_NAME}"
+
+GLOBAL_BIN="/usr/local/bin"
+INSTALL_PATH="${GLOBAL_BIN}/${APP_NAME}"
+
+# ======================
+# COLORS & HELPERS
+# ======================
+
+STEP=1
+if [ -t 1 ]; then
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    RED='\033[0;31m'
+    NC='\033[0m'
+else
+    GREEN='' YELLOW='' RED='' NC=''
+fi
+
+info()  { printf "${GREEN}→ %s${NC}\n" "$*" >&2; }
+warn()  { printf "${YELLOW}⚠  %s${NC}\n" "$*" >&2; }
+debug() { printf "${YELLOW}[DEBUG] %s${NC}\n" "$*" >&2; }
+die() {
+    printf >&2 "${RED}Error: %s${NC}\n" "$*"
+    exit 1
+}
+
+step_message() {
+    echo "" >&2
+    echo "==============================================================" >&2
+    printf "${GREEN}%s.  %s${NC}\n" "$STEP" "$1" >&2
+    echo "==============================================================" >&2
+    echo "" >&2
+    STEP=$((STEP + 1))
+}
+
+# ======================
+# SELF-INSTALL LOGIC (root-only)
+# ======================
+
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        die "This script must be run as root (use sudo)."
+    fi
+    info "Running as root."
+}
+
+perform_self_install() {
+    local force="$1"
+
+    if [ -x "${INSTALL_PATH}" ] && [ "$force" != "true" ]; then
+        # Already installed and not forcing → skip
+        return 0
+    fi
+
+    if [ "$force" = "true" ]; then
+        info "Force reinstall requested — overwriting ${INSTALL_PATH}..."
+    else
+        info "${APP_NAME} not found in ${INSTALL_PATH} → performing self-install..."
+    fi
+
+    mkdir -p "${GLOBAL_BIN}" || die "Cannot create ${GLOBAL_BIN}"
+
+    local tmp
+    tmp=$(mktemp "/tmp/${APP_NAME}-install-XXXXXXXX") || die "mktemp failed"
+
+    info "Downloading latest version from ${REPO_URL}..."
+    curl -fsSL "${REPO_URL}" -o "${tmp}" || {
+        rm -f "${tmp}"
+        die "Download failed. Check your REPO_URL and internet connection."
+    }
+
+    chmod 755 "${tmp}" || die "chmod failed"
+
+    if mv -f "${tmp}" "${INSTALL_PATH}"; then
+        info "✅ Successfully installed/updated ${APP_NAME} to ${INSTALL_PATH}"
+        if [ "$force" = "true" ]; then
+            info "Force reinstall completed."
+        else
+            info "You can now run it simply with: ${APP_NAME}"
+        fi
+    else
+        rm -f "${tmp}"
+        die "Failed to move script to ${INSTALL_PATH}"
+    fi
+}
+
+# ======================
+# FILE PATHS
+# ======================
+
+DOMAINS_FILE="/etc/letsencrypt/domains.conf"
+EMAIL_FILE="/etc/nginx/letsencrypt-email.conf"
+
+# ======================
+# UTILITY FUNCTIONS (unchanged from your v1.21)
+# ======================
+
+show_usage() {
+  cat << EOF
+Usage: ${APP_NAME} [OPTION]
+
+Options:
+  --help, -h              Show this help message
+  --version, -v           Show script version
+  --domains               Display current domains
+  --email                 Display current Let's Encrypt email
+  --nginx-conf            Re-generate only Nginx configuration files
+  --gitlab-conf           Re-generate only gitlab.rb configuration
+  --force-reinstall       Force download and reinstall the script itself to /usr/local/bin
+  (no option)             Run full setup (default)
+EOF
+  exit 0
+}
+
+show_version() {
+  echo "${APP_NAME} - GitLab + Nginx + Let's Encrypt Setup Script"
+  echo "Version ${SCRIPT_VERSION}"
+  exit 0
+}
+
+show_domains() {
+  if [ -f "$DOMAINS_FILE" ]; then
+    echo "=== Saved Domains in ${DOMAINS_FILE} ==="
+    cat "$DOMAINS_FILE"
+  else
+    echo "No domains file found at ${DOMAINS_FILE}"
+  fi
+  exit 0
+}
+
+show_email() {
+  if [ -f "$EMAIL_FILE" ]; then
+    echo "Let's Encrypt email: $(cat "$EMAIL_FILE")"
+  else
+    echo "No email configured yet at ${EMAIL_FILE}"
+  fi
+  exit 0
+}
+
+load_existing_domains() {
+  debug "Checking domains file: ${DOMAINS_FILE}"
+  if [ -f "$DOMAINS_FILE" ]; then
+    local content=$(cat "$DOMAINS_FILE" | tr '\n' ' ' | tr -s ' ' | sed 's/^ *//;s/ *$//')
+    debug "Content from file: '${content}'"
+    echo "$content"
+  else
+    debug "File NOT found → starting with empty list"
+    echo ""
+  fi
+}
+
+display_current_domains() {
+  local domains="$1"
+  local count=$(echo "$domains" | wc -w | tr -d ' ')
+  echo ""
+  echo "=== Current domains (${count} total) ===" >&2
+  if [ -n "$domains" ] && [ "$domains" != "" ]; then
+    for d in $domains; do
+      echo " - $d" >&2
+    done
+  else
+    echo " (no domains configured yet)" >&2
+  fi
+  echo "" >&2
+}
+
+save_domains_to_file() {
+  local domain_list="$1"
+  mkdir -p /etc/letsencrypt
+  echo "$domain_list" | tr ' ' '\n' > "$DOMAINS_FILE"
+  chmod 644 "$DOMAINS_FILE"
+  info "Domains saved to ${DOMAINS_FILE}"
+}
+
+ask_and_confirm_domains() {
+  local domains="$1"
+  debug "Entering domain confirmation phase with: '${domains}'"
+
+  while true; do
+    display_current_domains "$domains"
+
+    read -rp "Do you want to add more domains? (yes/no): " add_more
+    add_more=$(echo "$add_more" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$add_more" = "no" ] || [ "$add_more" = "n" ]; then
+      info "✅ Domains confirmed."
+      echo "$domains"
+      return
+    fi
+
+    echo "" >&2
+    info "Enter additional domains one by one (press Enter on empty line when done):"
+
+    while true; do
+      read -rp "  Domain: " new_domain
+      [ -z "$new_domain" ] && break
+
+      new_domain=$(echo "$new_domain" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+      [ -z "$new_domain" ] && continue
+
+      found=0
+      for existing in $domains; do
+        if [ "$existing" = "$new_domain" ]; then
+          found=1
+          break
+        fi
+      done
+
+      if [ $found -eq 0 ]; then
+        domains="$domains $new_domain"
+      else
+        debug "Domain '${new_domain}' already exists → skipped."
+      fi
+    done
+
+    domains=$(echo "$domains" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+    debug "Updated domains after adding: '${domains}'"
+  done
+}
+
+# ======================
+# CORE SETUP FUNCTIONS (unchanged)
+# ======================
+
+install_certbot() {
+  step_message "Installing certbot (if needed)"
+  if ! command -v certbot >/dev/null 2>&1; then
+    info "certbot not found → installing..."
+    apt-get update -qq
+    apt-get install -y certbot
+    info "certbot installed."
+  else
+    info "certbot is already installed."
+  fi
+}
+
+get_or_set_email() {
+  step_message "Configuring Let's Encrypt email"
+  if [ -f "$EMAIL_FILE" ]; then
+    email=$(cat "$EMAIL_FILE" | tr -d ' \t\n\r')
+    if [ -n "$email" ]; then
+      info "Using saved email: $email"
+      echo "$email"
+      return
+    fi
+  fi
+
+  while true; do
+    read -rp "Enter your email address for Let's Encrypt: " email
+    [ -n "$email" ] && break
+    warn "Email cannot be empty."
+  done
+
+  mkdir -p /etc/nginx
+  echo "$email" > "$EMAIL_FILE"
+  chmod 600 "$EMAIL_FILE"
+  info "Email saved."
+  echo "$email"
+}
+
+apply_letsencrypt_standalone() {
+  local domains="$1"
+  local email="$2"
+  local git_domain="$3"
+
+  step_message "Applying Let's Encrypt certificates (standalone mode)"
+
+  info "Stopping any service on port 80..."
+  systemctl stop nginx 2>/dev/null || true
+  fuser -k 80/tcp 2>/dev/null || true
+  sleep 2
+
+  local other_domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$git_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+  local cert_domains="$git_domain $other_domains"
+  cert_domains=$(echo "$cert_domains" | tr -s ' ' | sed 's/^ *//;s/ *$//')
+
+  debug "Final domains list for certbot: '${cert_domains}'"
+  local cert_domains_comma=$(echo "$cert_domains" | tr ' ' ',')
+
+  info "Requesting certificates with ${git_domain} as primary domain"
+
+  certbot certonly --standalone \
+    --email "$email" \
+    --agree-tos \
+    --non-interactive \
+    --allow-subset-of-names \
+    --domains "$cert_domains_comma" || die "Certbot failed to obtain certificates."
+
+  if [ ! -f "/etc/letsencrypt/live/${git_domain}/fullchain.pem" ]; then
+    die "Certificate files were not created under ${git_domain}"
+  fi
+
+  info "✅ Let's Encrypt certificates obtained successfully under ${git_domain}"
+}
+
+install_gitlab_ce() {
+  step_message "Installing GitLab CE (if needed)"
+  if command -v gitlab-ctl >/dev/null 2>&1; then
+    info "GitLab is already installed."
+  else
+    info "GitLab not found → installing gitlab-ce..."
+    apt-get update -qq
+    apt-get install -y curl
+    curl -sS https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
+    apt-get install -y gitlab-ce
+    info "GitLab CE installed."
+  fi
+}
+
+get_main_domain() {
+  local git_domain=""
+  if [ -f /etc/gitlab/gitlab.rb ]; then
+    git_domain=$(grep -E "^external_url" /etc/gitlab/gitlab.rb \
+      | sed -E 's|.*https?://([^/"]+).*|\1|' | head -n1 | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+  fi
+
+  if [ -z "$git_domain" ] || echo "$git_domain" | grep -qE 'example|gitlab\.example|localhost'; then
+    warn "No valid main GitLab domain found in gitlab.rb"
+    while true; do
+      read -rp "Enter your PRIMARY GitLab domain (e.g. git.crms.hk): " input
+      git_domain=$(echo "$input" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+      [ -n "$git_domain" ] && break
+      warn "Main domain cannot be empty."
+    done
+  else
+    info "Detected main domain: ${git_domain}"
+  fi
+  echo "$git_domain"
+}
+
+ask_gitlab_ssh_host() {
+  local main_domain="$1"
+  step_message "Configuring GitLab SSH Host"
+  warn "Tip: If using Cloudflare Proxy on ${main_domain}, use a different domain for SSH."
+
+  if [ -f /etc/gitlab/gitlab.rb ]; then
+    existing=$(grep -E "gitlab_rails\['gitlab_ssh_host'\]" /etc/gitlab/gitlab.rb 2>/dev/null | sed -E "s/.*'([^']+)'.*/\1/" || echo "")
+    if [ -n "$existing" ]; then
+      info "Current SSH host: ${existing}"
+      read -rp "Keep existing? (yes/no): " keep
+      if echo "$keep" | grep -qi "^y"; then
+        echo "$existing"
+        return
+      fi
+    fi
+  fi
+
+  while true; do
+    read -rp "Enter GitLab SSH Host: " host
+    host=$(echo "$host" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+    [ -n "$host" ] && { echo "$host"; return; }
+    warn "SSH host cannot be empty."
+  done
+}
+
+update_gitlab_config() {
+  local git_domain="$1"
+  local gitlab_ssh_host="$2"
+  local gitlab_rb="/etc/gitlab/gitlab.rb"
+
+  step_message "Updating gitlab.rb configuration"
+  cp "$gitlab_rb" "${gitlab_rb}.bak.$(date +%s)" 2>/dev/null || true
+
+  sed -i '/external_url/d' "$gitlab_rb" 2>/dev/null || true
+  sed -i '/gitlab_rails\['gitlab_ssh_host'\]/d' "$gitlab_rb" 2>/dev/null || true
+  sed -i '/nginx\['enable'\]/d' "$gitlab_rb" 2>/dev/null || true
+  sed -i '/letsencrypt\['enable'\]/d' "$gitlab_rb" 2>/dev/null || true
+  sed -i '/web_server\['external_users'\]/d' "$gitlab_rb" 2>/dev/null || true
+
+  cat >> "$gitlab_rb" << EOF
+
+external_url 'https://${git_domain}'
+gitlab_rails['gitlab_ssh_host'] = '${gitlab_ssh_host}'
+web_server['external_users'] = ['www-data']
+nginx['enable'] = false
+letsencrypt['enable'] = false
+EOF
+
+  info "gitlab.rb updated."
+}
+
+check_gitlab_after_reconfigure() {
+  step_message "Checking GitLab after reconfigure"
+  if gitlab-ctl status >/dev/null 2>&1; then
+    info "GitLab services appear to be running."
+  else
+    warn "GitLab services may need manual check."
+  fi
+}
+
+install_nginx() {
+  step_message "Installing Nginx (if needed)"
+  if ! command -v nginx >/dev/null 2>&1; then
+    info "Nginx not found → installing..."
+    apt-get update -qq
+    apt-get install -y nginx
+    info "Nginx installed."
+  else
+    info "Nginx is already installed."
+  fi
+}
+
+setup_nginx_configs() {
+  local domains="$1"
+  local git_domain="$2"
+  local cert_path="/etc/letsencrypt/live/${git_domain}"
+
+  step_message "Setting up Nginx configurations"
+
+  rm -f /etc/nginx/sites-enabled/default
+  mkdir -p /var/www/letsencrypt
+
+  cat > /etc/nginx/sites-available/gitlab-workhorse.conf << 'EOF'
+upstream gitlab-workhorse {
+    server unix:/var/opt/gitlab/gitlab-workhorse/sockets/socket fail_timeout=0;
+}
+EOF
+
+  cat > /etc/nginx/sites-available/redirect.conf << 'EOF'
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        try_files $uri =404;
+    }
+    return 301 https://$server_name$request_uri;
+}
+EOF
+
+  ln -sf /etc/nginx/sites-available/gitlab-workhorse.conf /etc/nginx/sites-enabled/
+  ln -sf /etc/nginx/sites-available/redirect.conf /etc/nginx/sites-enabled/
+
+  for domain in $domains; do
+    if [ "$domain" = "$git_domain" ]; then
+      cat > "/etc/nginx/sites-available/${domain}.conf" << EOF
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${domain};
+
+    ssl_certificate ${cert_path}/fullchain.pem;
+    ssl_certificate_key ${cert_path}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384;
+    ssl_prefer_server_ciphers off;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+
+    client_max_body_size 0;
+    gzip off;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        try_files \$uri =404;
+    }
+
+    location / {
+        proxy_pass http://gitlab-workhorse;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$http_connection;
+        proxy_read_timeout 900;
+        proxy_connect_timeout 300;
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}
+EOF
+    else
+      mkdir -p "/var/www/${domain}"
+      cat > "/var/www/${domain}/index.html" << EOF
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>${domain}</title>
+<style>body{font-family:Arial,sans-serif;text-align:center;padding:100px;background:#f4f4f4;}h1{color:#2c3e50;}</style>
+</head>
+<body>
+<h1>${domain}</h1>
+<p>This is a static website.</p>
+<p><strong>GitLab:</strong> <a href="https://${git_domain}">${git_domain}</a></p>
+</body>
+</html>
+EOF
+
+      cat > "/etc/nginx/sites-available/${domain}.conf" << EOF
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${domain};
+    root /var/www/${domain};
+    index index.html;
+
+    ssl_certificate ${cert_path}/fullchain.pem;
+    ssl_certificate_key ${cert_path}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers off;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        try_files \$uri =404;
+    }
+}
+EOF
+    fi
+    ln -sf "/etc/nginx/sites-available/${domain}.conf" /etc/nginx/sites-enabled/
+  done
+
+  info "Nginx configuration files created."
+}
+
+# ======================
+# FULL SETUP
+# ======================
+
+run_full_setup() {
+  check_root
+  perform_self_install "false"   # normal install (no force)
+
+  debug "=== Starting domain loading phase ==="
+  initial_domains=$(load_existing_domains)
+  git_domain=$(get_main_domain)
+  if [ -z "$initial_domains" ]; then
+    domains_to_confirm="$git_domain"
+  else
+    domains_to_confirm="$initial_domains"
+  fi
+  domains=$(ask_and_confirm_domains "$domains_to_confirm")
+  save_domains_to_file "$domains"
+
+  install_certbot
+  email=$(get_or_set_email)
+
+  apply_letsencrypt_standalone "$domains" "$email" "$git_domain"
+
+  install_gitlab_ce
+  gitlab_ssh_host=$(ask_gitlab_ssh_host "$git_domain")
+  update_gitlab_config "$git_domain" "$gitlab_ssh_host"
+  if command -v gitlab-ctl >/dev/null 2>&1; then
+    gitlab-ctl reconfigure
+  fi
+  check_gitlab_after_reconfigure
+
+  install_nginx
+
+  step_message "Preparing Nginx"
+  systemctl stop nginx 2>/dev/null || true
+
+  setup_nginx_configs "$domains" "$git_domain"
+
+  nginx -t && info "Nginx config test passed." || die "Nginx config test failed!"
+  systemctl restart nginx
+  info "Nginx restarted successfully."
+
+  echo ""
+  info "🎉 Full setup completed successfully!"
+  info "   GitLab Web URL : https://${git_domain}"
+  info "   GitLab SSH Host: ${gitlab_ssh_host}"
+}
+
+# ======================
+# ARGUMENT PARSING
+# ======================
+
+case "$1" in
+  --help|-h)          show_usage ;;
+  --version|-v)       show_version ;;
+  --domains)          show_domains ;;
+  --email)            show_email ;;
+  --nginx-conf)
+    check_root
+    perform_self_install "false"
+    domains=$(load_existing_domains)
+    [ -z "$domains" ] && die "No domains found. Run full setup first."
+    git_domain=$(get_main_domain)
+    setup_nginx_configs "$domains" "$git_domain"
+    info "✅ Nginx configs regenerated."
+    exit 0
+    ;;
+  --gitlab-conf)
+    check_root
+    perform_self_install "false"
+    git_domain=$(get_main_domain)
+    gitlab_ssh_host=$(ask_gitlab_ssh_host "$git_domain")
+    update_gitlab_config "$git_domain" "$gitlab_ssh_host"
+    gitlab-ctl reconfigure
+    info "✅ gitlab.rb updated and reconfigured."
+    exit 0
+    ;;
+  --force-reinstall)
+    check_root
+    perform_self_install "true"
+    info "Force reinstall completed. You can now run '${APP_NAME}' for full setup."
+    exit 0
+    ;;
+  "")                 run_full_setup ;;
+  *)                  die "Unknown option. Use --help." ;;
+esac
