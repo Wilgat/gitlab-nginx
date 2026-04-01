@@ -327,22 +327,39 @@ install_gitlab_ce() {
 
 get_main_domain() {
   local git_domain=""
+
+  step_message "Detecting main GitLab domain"
+
+  # Try to extract from existing gitlab.rb
   if [ -f /etc/gitlab/gitlab.rb ]; then
     git_domain=$(grep -E "^external_url" /etc/gitlab/gitlab.rb \
-      | sed -E 's|.*https?://([^/"]+).*|\1|' | head -n1 | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+      | sed -E 's|.*https?://([^/":[:space:]]+).*|\1|' | head -n1 | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
   fi
 
-  if [ -z "$git_domain" ] || echo "$git_domain" | grep -qE 'example|gitlab\.example|localhost'; then
-    warn "No valid main GitLab domain found in gitlab.rb"
+  # If still invalid (fresh install or bad value), ask user
+  if [ -z "$git_domain" ] || echo "$git_domain" | grep -qE '(example|gitlab\.example|localhost|127\.0\.0\.1|0\.0\.0\.0)'; then
+    if [ -z "$git_domain" ]; then
+      warn "No external_url found in gitlab.rb (fresh install or default config)."
+    else
+      warn "Invalid or placeholder domain detected: ${git_domain}"
+    fi
+
+    echo "" >&2
+    info "Please enter your PRIMARY GitLab domain (this will be the main HTTPS address):"
     while true; do
-      read -rp "Enter your PRIMARY GitLab domain (e.g. git.crms.hk): " input
+      read -rp "  Primary domain (e.g. git.crms.hk): " input
       git_domain=$(echo "$input" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
-      [ -n "$git_domain" ] && break
-      warn "Main domain cannot be empty."
+
+      if [ -n "$git_domain" ] && ! echo "$git_domain" | grep -qE '(example|localhost|127\.0\.0\.1)'; then
+        info "✅ Using primary domain: ${git_domain}"
+        break
+      fi
+      warn "Please enter a valid domain name (cannot be empty or placeholder)."
     done
   else
-    info "Detected main domain: ${git_domain}"
+    info "Detected main domain from gitlab.rb: ${git_domain}"
   fi
+
   echo "$git_domain"
 }
 
