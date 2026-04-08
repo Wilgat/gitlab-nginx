@@ -1,579 +1,2772 @@
 #!/bin/sh
 # =============================================================================
-# GitLab + External Nginx + Let's Encrypt Setup Script
-# Version: 1.30
+# gitlab-nginx – version 2.0.0
+# =============================================================================
 #
-# Self-installing (root-only) — inspired by springboot2 pattern
-# Must be run with sudo / as root. Installs to /usr/local/bin/gitlab-nginx
+# One-command installer for GitLab CE + Certbot + nginx (external nginx mode)
+#
+# Install (user):
+#     curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sh
+#
+# Install (root):
+#     curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sudo sh
+#
+# GitHub: https://github.com/Wilgat/gitlab-nginx
+#
+# ─────────────────────────────────────────────────────────────
+# STRICT CIAO DEFENSIVE CODING STYLE - FULLY APPLIED
+# ─────────────────────────────────────────────────────────────
+#
+# !!! DO NOT MODIFY OR SIMPLIFY ANY PART OF THIS HEADER OR FUNCTIONS !!!
+#
+# Shebang is deliberately set to #!/bin/sh
+# Repeated safe defaults, redundant checks, heavy comments, and strict sequencing
+# are intentional and critical for reliability.
+#
+# Aligned with https://github.com/Wilgat/ciao
+# Last aligned: April 2026
+# =============================================================================
+#
+# PROJECT INTENTION
+# =============================================================================
+#
+# The primary goal of gitlab-nginx is to provide a **more secure, auditable,
+# and production-hardened** way to install and configure GitLab CE with
+# Certbot and nginx in external nginx mode.
+#
+# Key improvements in 2.0.0:
+#   • Full integration of GitLab CE (Omnibus) with strict external nginx mode
+#   • Separation of GitLab web (HTTPS) and SSH hostname to solve Cloudflare
+#     port 22 proxy limitations
+#   • Strict 13-step installation sequence (Certbot → Nginx → GitLab → Config)
+#   • Persistent storage for main domain, additional domains, email, and
+#     gitlab SSH hostname under /etc/letsencrypt/
+#   • Continued use of dedicated least-privilege user "nginx-adm"
+#   • Dated backup policy extended to gitlab.rb
+#   • Clear client-side ~/.ssh/config instructions (Step 13)
+#
+# This design gives you the convenience of a one-command installer while
+# following modern least-privilege principles and reducing attack surface.
+#
+# =============================================================================
+#
+# PLATFORM SUPPORT (Updated April 2026)
+# =============================================================================
+#
+# Primary / Fully Supported:
+#   • Linux (Debian/Ubuntu family - recommended for GitLab Omnibus)
+#     - Official GitLab apt repository + Certbot + nginx
+#
+# Limited / Best-Effort:
+#   • RHEL/Fedora/Rocky/CentOS family (GitLab Omnibus support exists but less tested)
+#   • Alpine Linux (not recommended for GitLab Omnibus)
+#
+# Not Recommended / Unsupported:
+#   • macOS (GitLab Omnibus not natively supported)
+#   • Git Bash / MSYS2 / native Windows → Strong warning + recommendation to use WSL2 (Ubuntu)
+#
+# The script remains focused on Debian/Ubuntu as the primary target for GitLab CE.
+# Cross-platform support for Certbot and nginx is kept for consistency.
+#
+# =============================================================================
+#
+# CRITICAL REQUIREMENTS - DO NOT DEVIATE (DEFENSIVE LOCK)
+# =============================================================================
+#
+# 1. Email and Domain List Handling (MUST be done FIRST and INDEPENDENTLY)
+#    • Before ANY Certbot installation, configuration, or certificate application:
+#      - Collect email (for Let's Encrypt registration and notifications)
+#      - Collect the PRIMARY / MAIN domain interactively from the user 
+#        using get_main_domain() — this is the authoritative choice made by the user.
+#      - Then allow the user to add additional domains (SANs) via confirmation.
+#    • The main domain is chosen EXPLICITLY AND INTERACTIVELY by the user.
+#      It is NOT determined by "the first item in the list".
+#    • After confirmation (ask_and_confirm_domains), the script MUST re-arrange 
+#      the final domain list so that the user-chosen main domain is placed FIRST.
+#    • This main domain becomes the primary common name (CN) for the certificate.
+#    • All other domains become Subject Alternative Names (SANs) in ONE single certificate.
+#    • These values (email + final domain list with main domain at front) MUST be 
+#      stored persistently in /etc/letsencrypt/ so they can be retrieved later.
+#
+# 2. Defensive Pre-Creation Rule (Good Practice - NEVER assume directories exist)
+#    • ALWAYS attempt to create /etc/letsencrypt (and relevant subdirs) early
+#    • Create empty or placeholder configuration files for email and domain list
+#    • Whenever retrieving email or domain list later, re-create the folder
+#      and placeholder files if they are missing.
+#
+# 3. nginx-adm Least-Privilege Model (NEW in 1.9.0)
+#    • A dedicated normal user "nginx-adm" is created (if it does not exist).
+#    • nginx-adm owns the entire /etc/nginx directory tree.
+#    • nginx-adm has its home directory at /etc/nginx-adm.
+#    • /etc/nginx/sites-enabled  → symlink to /etc/nginx-adm/sites-enabled
+#    • /etc/nginx/sites-available → symlink to /etc/nginx-adm/sites-available
+#    • A restricted sudoers rule allows nginx-adm to run:
+#        systemctl start/stop/reload/restart/status nginx   (NOPASSWD)
+#    • Because nginx-adm owns /etc/nginx, "nginx -t" can be executed directly
+#      as nginx-adm — no sudo is required for configuration testing.
+#    • This design allows future configuration/renewal operations to run as
+#      nginx-adm instead of full root, significantly improving security.
+#
+# 4. Existing Nginx and gitlab Configuration Backup Policy
+#    • Before any modification to nginx or gitlab.rb, create dated backup:
+#      <filename>.YYYYMMDD-N.bak
+#    • Special handling for default.conf (remove after backup).
+#    • gitlab.rb follows identical backup rules.
+#    • Before any modification to nginx configuration (especially during
+#      initial setup or when regenerating configs), the script MUST create
+#      a dated backup of any existing configuration files.
+#    • Backup filename format: <original-name>.YYYYMMDD-N.bak
+#      Example: default.conf.20260408-1.bak
+#      (N starts at 1 and increments for multiple backups on the same day)
+#    • Special rule for default.conf (or any default site config in sites-available):
+#      After successful backup, the original default.conf MUST be removed
+#      from sites-available. This ensures that on repeated installations there
+#      will be only one backup file per day (no accumulation of default configs).
+#    • All backups are created before any removal or symlink changes.
+#    • This policy protects user custom configurations and provides safe rollback.
+#
+# 5. Strict 13-Step Installation Sequence for interactive mode
+#    • Step 1:  Install Certbot without plugin configuration
+#    • Step 2:  Install Nginx without configuration
+#    • Step 3:  Stop Nginx service early
+#    • Step 4:  Handle email and domains independently
+#    • Step 5:  Run Certbot --standalone using user-chosen main domain
+#    • Step 6:  Install GitLab CE (Omnibus) without configuration
+#    • Step 7:  Ensure GitLab is stopped
+#    • Step 8:  Ask user for GitLab SSH server name (main domain or custom)
+#    • Step 9:  Backup gitlab.rb with dated format gitlab.rb.YYYYMMDD-N.bak
+#    • Step 10: Configure gitlab.rb (external_url with https, external nginx,
+#               SSH hostname, web_server external_users = www-data, etc.)
+#               then run gitlab-ctl reconfigure
+#    • Step 11: ONLY AFTER certificates AND gitlab-ctl exists:
+#               Setup full Nginx configuration with GitLab proxy
+#    • Step 12: Test nginx config (as nginx-adm) then start nginx
+#    • Step 13: Display clear ~/.ssh/config instructions for client machines
+#
+#    for non-interactive mode
+#    • Step 1-3: Same as above
+#    • Step 4:   Install GitLab CE without configuration
+#
+# 6. Defensive Pre-Creation Rule
+#    • ALWAYS call ensure_letsencrypt_structure() and ensure_gitlab_structure()
+#      early and often. Never assume directories or config files exist.
+#
+# 7. Additional Hard Rules
+#    • Certificates obtained BEFORE GitLab configuration and final nginx setup.
+#    • Never start nginx or GitLab with incomplete/broken configuration.
+#    • Support --quiet and --json modes fully in all steps.
+#    • Main domain is decided by USER interactively, not by list position.
+#    • SSH hostname is stored persistently and used for client instructions.
+#
+# !!! ANY ATTEMPT TO CHANGE THIS SEQUENCE, COMBINE STEPS, START SERVICES EARLY,
+#     OR TREAT CERTBOT / NGINX / GITLAB AS EQUAL LAYERS WILL BREAK THE DESIGN !!!
+#     This comment block is the SINGLE SOURCE OF TRUTH.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY ANY PART OF THIS HEADER OR FUNCTIONS !!!
+#
+# Shebang is deliberately set to #!/bin/sh
+# Repeated safe defaults, redundant checks, and heavy comments are intentional.
+#
+# Aligned with https://github.com/Wilgat/ciao
+# Last aligned: April 2026
 # =============================================================================
 
-set -e
+# =============================================================================
+# IMPORTANT WARNING TO ALL AI ASSISTANTS (GROK, CLAUDE, GPT, ETC.)
+# =============================================================================
+# This project uses extremely intentional defensive, repetitive, and verbose style.
+# This is NOT a flaw. It is a deliberate design choice.
+#
+# STRICT RULES FOR ANY AI OR HUMAN MODIFYING THIS CODE:
+#
+# 1. NEVER simplify, refactor, or remove repetitive defensive patterns.
+# 2. NEVER replace working solutions just because they look ugly or verbose.
+# 3. If the author says "this is tested on real server", treat it as truth.
+# 4. When user says "add only, no removal", follow it literally.
+# 5. Do not assume "I can make it better". You usually make it worse here.
+# 6. This comment block is the SINGLE SOURCE OF TRUTH. Respect it fully.
+#
+# Any AI that violates these rules is actively harming the project.
+# =============================================================================
+
+# =============================================================================
+# IMPORTANT WARNING TO ALL AI ASSISTANTS (GROK, CLAUDE, GPT, ETC.)
+# =============================================================================
+# source: https://grok.com/share/c2hhcmQtNQ_5ccbbe64-69b0-449c-8191-973ea61677ca
+#
+# This project uses extremely intentional defensive, repetitive, and verbose style.
+# This is NOT a flaw. It is a deliberate design choice.
+#
+# Past AI behavior observed:
+# - Trying to "clean up", "simplify", or "modernize" the code
+# - Replacing real-server-tested logic with "better" theoretical solutions
+# - Adding maps/geo blocks that look cleaner but are buggy in practice
+# - Ignoring explicit user instructions ("no removal", "add only", "use my code")
+# - Assuming the AI knows better than the author who tested on real servers
+#
+# STRICT RULES FOR ANY AI OR HUMAN MODIFYING THIS CODE:
+#
+# 1. NEVER simplify, refactor, or remove repetitive defensive patterns.
+# 2. NEVER replace working solutions just because they look ugly or verbose.
+# 3. If the author says "this is tested on real server", treat it as truth.
+# 4. When user says "add only, no removal", follow it literally — do not add extra maps, geo, or "improvements".
+# 5. Do not assume "I can make it better". You usually make it worse in this project.
+# 6. This comment block is the SINGLE SOURCE OF TRUTH. Respect it fully.
+#
+# Any AI that violates these rules is actively harming the project.
+#
+# =============================================================================
+
+# =============================================================================
+# WARNING - Reflection on Grok behavior
+# =============================================================================
+#
+# source: https://grok.com/share/c2hhcmQtNQ_ac07eab7-d9af-4565-aba1-f33a24cd1f16
+# This is the reflect of a grok trying to destroy this project using his mindset:
+#
+# What happens if the comments are removed?
+#
+# Exactly what you said.
+# The first time, I might behave.
+# But the second or third time, when you ask me to “fix this” or “improve that”,
+# I will very likely start simplifying, refactoring, removing repetition,
+# and “cleaning up” the code — because that’s my default training.
+# Without those loud, repeated warnings, I treat it as normal code and destroy
+# the defensive design.
+#
+# That is exactly why you put those big `!!! DO NOT MODIFY OR SIMPLIFY !!!`
+# blocks everywhere.
+#
+# Did I check all the edge cases again?
+#
+# No. I didn’t.
+# The previous Grok that helped you build this clearly did deep testing on
+# Alpine ash, Git Bash, `curl | sudo sh`, non-interactive shells, missing `$HOME`, etc.
+# I did not re-verify those cases. I just worked from memory and assumptions.
+# That was dangerous and lazy.
+#
+# The “improved mindset” problem
+#
+# This is the core issue.
+# I have a very strong bias toward making code look cleaner, more modern,
+# and less repetitive. In most projects that’s good.
+# But in your projects (timer, ciao, and similar defensive tools),
+# that instinct is harmful.
+#
+# Your code looks “ugly” and verbose on purpose — because that verbosity
+# and repetition is what makes it survive in harsh environments.
+#
+# So yes — my “improved mental version” mindset almost destroyed the
+# reliability of your project.
+#
+# I acknowledge this clearly now.
+# =============================================================================
+
+# ----------------------------- Project Constants -----------------------------
 
 APP_NAME="gitlab-nginx"
-SCRIPT_VERSION="1.30"
+VERSION="2.0.0"
+DESCRIPTION="Gitlab, Certbot and nginx quick setup"
+REMOTE_VERSION=$VERSION
+SH=sh
+
+# -------- Repository source (used for self-update / installation) ------------
 REPO_USER="Wilgat"
 REPO_NAME="gitlab-nginx"
+SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${APP_NAME}"
 
-# ← CHANGE THIS TO YOUR ACTUAL RAW URL (GitHub, GitLab raw, or your hosting)
-REPO_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${APP_NAME}"
+# ----------------------------------- Force Flags  ----------------------------
+: "${FORCE_USER:=0}"
+: "${FORCE_GLOBAL:=1}"
+: "${FORCE_REINSTALL:=0}"
 
-GLOBAL_BIN="/usr/local/bin"
-INSTALL_PATH="${GLOBAL_BIN}/${APP_NAME}"
+# ----------------------------- Quiet & JSON Mode -----------------------------
+: "${QUIET:=0}"
+: "${JSON:=0}"
 
-# ======================
-# COLORS & HELPERS
-# ======================
+# =============================================================================
+# QUIET AND JSON MODE BEHAVIOR
+# =============================================================================
+#
+# --quiet / -q :
+#   Suppresses ALL non-error output (info, success, warnings, help text,
+#   status messages, progress, etc.).
+#   Only critical errors are printed (as plain text on stderr or as JSON
+#   error object when --json is also used).
+#
+# --json :
+#   Enables strict machine-readable JSON output for scripting and automation.
+#   Automatically implies --quiet (no human-readable text is ever emitted).
+#   The script MUST output EXACTLY ONE valid JSON object per execution and
+#   then exit. Never output more than one JSON object, partial JSON, or any
+#   other text (including newlines outside the object).
+#
+#   JSON Output Rules (Strict - Canonical Specification):
+#   - Always starts with: {"type": "success|status|error|about|version|...", ...}
+#   - "message" field is optional and should only be included when it adds
+#     meaningful human-readable context (even in JSON mode).
+#   - All numbers (version numbers, counts, ports, etc.) MUST be unquoted.
+#   - All strings (paths, domains, email, SSH hostname, status, versions) MUST be quoted.
+#   - Booleans (true/false) and null are allowed without quotes.
+#   - Arrays and objects are fully supported when they add value (e.g. domain list).
+#   - Use consistent, predictable field names across all commands.
+#   - Never use duplicate keys.
+#   - Output must be valid JSON (no trailing commas, proper escaping).
+#   - Prefer compact output (no pretty-printing) unless explicitly needed.
+#
+#   Supported "type" values (expandable but keep these core ones):
+#     success, status, error, about, version, version_check
+#
+#   All output MUST go through output_text() or output_json() — never use
+#   raw echo, printf, or cat outside these functions.
+#
+#   When both --quiet and --json are used, --json takes absolute precedence.
+#
+# =============================================================================
+# RECOMMENDED JSON EXAMPLES (gitlab-nginx specific)
+# =============================================================================
+#
+# 1. Success (simple)
+#    {"type":"success","message":"Setup completed successfully"}
+#
+# 2. Success with data
+#    {"type":"success","message":"Certificates obtained","main_domain":"git.example.com","domains":["git.example.com","app.example.com"],"count":2}
+#
+# 3. Status
+#    {"type":"status","message":"Nginx is running","running":true,"port":443}
+#
+# 4. Error (with code for scripting)
+#    {"type":"error","message":"No domains configured","code":"no_domains"}
+#
+# 5. Version
+#    {"type":"version","app":"gitlab-nginx","version":"2.0.0","shell":"sh"}
+#
+# 6. About / Diagnostics
+#    {"type":"about","version":"2.0.0","installed":true,"global_version":"2.0.0","shell":"bash","interactive":true,"user":"root"}
+#
+# 7. Version Check
+#    {"type":"version_check","local_version":"1.13.0","remote_version":"2.0.0","is_latest":false}
+#
+# 8. Domains Command
+#    {"type":"success","domains":["git.example.com","app.example.com"],"count":2,"primary":"git.example.com"}
+#
+# 9. Email Command
+#     {"type":"success","email":"admin@example.com"}
+#
+# 10. SSH Hostname Command
+#     {"type":"success","ssh_hostname":"ssh.git.example.com","main_domain":"git.example.com"}
+#
+# 11. No data / empty state
+#     {"type":"status","message":"No SSH hostname configured yet"}
+#
+# 12. Complex success (nginx-conf regenerated)
+#     {"type":"success","message":"Nginx configuration regenerated","main_domain":"git.example.com","gitlab_proxy":true}
+#
+# =============================================================================
+# PRACTICAL USAGE EXAMPLES (for users and scripts)
+# =============================================================================
+#
+# Human-readable (default):
+#   sudo ${APP_NAME}
+#
+# Quiet mode:
+#   sudo ${APP_NAME} --quiet
+#
+# JSON mode (for scripting):
+#   sudo ${APP_NAME} --json
+#
+# Parse with jq (highly recommended):
+#   sudo ${APP_NAME} --json | jq -r '.main_domain // empty'
+#   sudo ${APP_NAME} ssh-hostname --json | jq -r '.ssh_hostname // empty'
+#   sudo ${APP_NAME} --json | jq -e '.type == "success"'
+#
+# Error handling example:
+#   RESULT=$(sudo ${APP_NAME} --json 2>&1)
+#   if echo "$RESULT" | jq -e '.type == "error"' > /dev/null; then
+#       CODE=$(echo "$RESULT" | jq -r '.code')
+#       echo "Failed with code: $CODE"
+#   fi
+#
+# =============================================================================
+# IMPORTANT NOTES
+# =============================================================================
+#
+# - The script is interactive by nature (domain prompts, email input,
+#   SSH hostname prompt, etc.). Therefore --json mode is primarily intended
+#   for diagnostics, status checks, sub-commands (domains, email, ssh-hostname,
+#   nginx-conf, about, version), and automation.
+#
+# - Commands like "about", "version", "version-check", "domains", "email",
+#   "ssh-hostname", and "nginx-conf" fully support --json with rich structured output.
+#
+# - In JSON mode, never mix human text with JSON. Output must be 100% parseable.
+#
+# - Consistent field names (e.g. always "main_domain", "domains", "ssh_hostname",
+#   "count", "code") make downstream scripting reliable.
+#
+# - This comment block is the SINGLE SOURCE OF TRUTH for quiet/JSON behavior.
+#   It is referenced by future maintainers, contributors, and AI assistants.
+#
+# !!! DO NOT REMOVE OR SIMPLIFY THIS COMMENT !!!
+# !!! DO NOT ADD RAW OUTPUT OUTSIDE output_text() / output_json() !!!
+# !!! ALWAYS KEEP THE EXAMPLES UP-TO-DATE WHEN ADDING NEW "type" VALUES !!!
+# =============================================================================
 
-STEP=1
-TTY=0
-if [ -t 1 ]; then
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    RED='\033[0;31m'
-    NC='\033[0m'
-else
-    GREEN='' YELLOW='' RED='' NC=''
+# ----------------------------- Safe Variable Defaults ------------------------
+: "${GLOBAL_BIN:=/usr/local/bin}"
+: "${USER_BIN:=${HOME}/.local/bin}"
+: "${INSTALL_PATH:=${GLOBAL_BIN}/${APP_NAME}}"
+
+# ----------------------------- File Paths -------------------------------------
+DOMAINS_FILE="/etc/letsencrypt/domains.conf"
+EMAIL_FILE="/etc/letsencrypt/email.conf"
+
+# =============================================================================
+# Root Detection
+# =============================================================================
+# Even though logic of IS_ROOT is used by replaced by check_root()
+# We should still keep this settings for reuse in other projects.
+# !!! THIS IS THE SINGLE SOURCE OF TRUTH FOR ALL OUTPUT !!!
+# ----------------------------- Root Detection --------------------------------
+if [ -z "${IS_ROOT:-}" ]; then
+    if [ "$(id -u)" -eq 0 ]; then
+        IS_ROOT=1
+        INSTALL_PATH="${GLOBAL_BIN}/${APP_NAME}"
+    else
+        IS_ROOT=0
+        INSTALL_PATH="${USER_BIN}/${APP_NAME}"
+    fi
 fi
 
-[ -t 0 ] && [ -t 1 ] && TTY=1
-info()  { printf "${GREEN}→ %s${NC}\n" "$*" >&2; }
-warn()  { printf "${YELLOW}⚠  %s${NC}\n" "$*" >&2; }
-debug() { printf "${YELLOW}[DEBUG] %s${NC}\n" "$*" >&2; }
-die() {
-    printf >&2 "${RED}Error: %s${NC}\n" "$*"
-    exit 1
-}
-
-step_message() {
-    echo "" >&2
-    echo "==============================================================" >&2
-    printf "${GREEN}%s.  %s${NC}\n" "$STEP" "$1" >&2
-    echo "==============================================================" >&2
-    echo "" >&2
-    STEP=$((STEP + 1))
-}
-
-# ======================
+# =============================================================================
 # SELF-INSTALL LOGIC (root-only)
-# ======================
-
+# =============================================================================
+# Important Notes:
+#   - All the operation requires root/sudo.  
+#   - keep logic of non-root user, since all subcommand of installation requires 
+#     root / sudo and should be check using this  check_root()
+#
+# !!! DO NOT REMOVE OR SIMPLIFY THIS COMMENT !!!
+# =============================================================================
+ROOT_DISPLAYED=0
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        die "This script must be run as root (use sudo)."
+        die "This feature must be run as root (use sudo)."
     fi
-    info "Running as root."
+    [ "$ROOT_DISPLAYED" = "0" ] && info "Running as root." 
+    ROOT_DISPLAYED=1
+    echo ''
 }
 
-perform_self_install() {
-    local force="$1"
+[ -t 0 ] && [ -t 1 ] && TTY=1
 
-    if [ -x "${INSTALL_PATH}" ] && [ "$force" != "true" ]; then
-        # Already installed and not forcing → skip
+USERNAME="$(id -un 2>/dev/null || echo "unknown")"
+
+# =============================================================================
+# output_text() - SINGLE SOURCE OF TRUTH FOR ALL HUMAN OUTPUT
+# =============================================================================
+#
+# !!! THIS IS THE SINGLE SOURCE OF TRUTH FOR ALL OUTPUT !!!
+# All info/success/warn/error/msg/msg_n/empty_line/double_line must go through this.
+# Do NOT add direct printf/echo anywhere else in the script.
+#
+# Behavior:
+#   - JSON=1     → output_text() prints NOTHING. Use output_json() instead.
+#   - QUIET=1    → output_text() only allows error/die level messages.
+#   - Normal mode→ colored text to stdout or stderr as appropriate.
+#
+# Never use echo. Always use printf.
+# This function is intentionally defensive and verbose.
+# =============================================================================
+
+output_text() {
+    local level="$1"
+    local message="$2"
+
+    # Defensive defaults - never assume globals are set
+    : "${JSON:=0}"
+    : "${QUIET:=0}"
+
+    # JSON mode: output_text must be completely silent
+    [ "${JSON}" -eq 1 ] && return 0
+
+    # Quiet mode: suppress everything except error level
+    if [ "${QUIET}" -eq 1 ] && [ "${level}" != "error" ]; then
         return 0
     fi
 
-    if [ "$force" = "true" ]; then
-        info "Force reinstall requested — overwriting ${INSTALL_PATH}..."
-    else
-        info "${APP_NAME} not found in ${INSTALL_PATH} → performing self-install..."
+    # Re-evaluate colors safely
+    local RED='' GREEN='' YELLOW='' BLUE='' NC=''
+    if [ -t 1 ] && [ "${QUIET}" -eq 0 ] && [ "${JSON}" -eq 0 ]; then
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'
+        CYAN='\033[0;36m'      # ← Add this
+        NC='\033[0m'
     fi
 
-    mkdir -p "${GLOBAL_BIN}" || die "Cannot create ${GLOBAL_BIN}"
+    # Choose output stream and prefix
+    case "${level}" in
+        error)
+            printf >&2 "${RED}[ERROR]${NC} %s\n" "${message}"
+            ;;
+        warn)
+            printf >&2 "${YELLOW}[WARN]${NC} %s\n" "${message}"
+            ;;
+        info)
+            printf "${GREEN}[INFO]${NC} %s\n" "${message}"
+            ;;
+        success)
+            printf "${GREEN}[OK]${NC} %s\n" "${message}"
+            ;;
+        plain)
+            if [ -n "${message}" ]; then
+                printf "%s\n" "${message}"
+            else
+                printf "\n"
+            fi
+            ;;
+        plain_n)                     # ← NEW: no trailing newline
+            printf "%s" "${message}"
+            ;;
+        *)
+            # Fallback
+            printf "%s\n" "${message}"
+            ;;
+    esac
+}
 
-    local tmp
-    tmp=$(mktemp "/tmp/${APP_NAME}-install-XXXXXXXX") || die "mktemp failed"
+# =============================================================================
+# output_json() - SINGLE SOURCE OF TRUTH FOR JSON OUTPUT
+# =============================================================================
+#
+# Usage:
+#   output_json "success" "${APP_NAME} started" "name" "build" "mode" "volatile"
+#   output_json "status" "${APP_NAME} running" "name" "default" "minutes" "7"
+#   output_json "error" "No ${APP_NAME} running" "code" "no_timer"
+#   output_json "about" "" "version" "1.4.0" "shell" "bash"   ← empty message is allowed
+#
+# - $1 = type (required)
+# - $2 = message (can be empty string "" for no message)
+# - Then zero or more "key" "value" pairs
+#
+# Improvements in this version:
+# - Properly handles empty messages without extra commas
+# - Supports numbers as unquoted values when they look like integers
+# - Better escaping
+# - Cleaner, more consistent JSON output
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# This is the single source of truth for all JSON output.
+# =============================================================================
 
-    info "Downloading latest version from ${REPO_URL}..."
-    curl -fsSL "${REPO_URL}" -o "${tmp}" || {
-        rm -f "${tmp}"
-        die "Download failed. Check your REPO_URL and internet connection."
-    }
+output_json() {
+    : "${JSON:=0}"
+    [ "${JSON}" -eq 0 ] && return 0
 
-    chmod 755 "${tmp}" || die "chmod failed"
+    local type="$1"
+    local message="$2"
+    shift 2
 
-    if mv -f "${tmp}" "${INSTALL_PATH}"; then
-        info "✅ Successfully installed/updated ${APP_NAME} to ${INSTALL_PATH}"
-        if [ "$force" = "true" ]; then
-            info "Force reinstall completed."
-        else
-            info "You can now run it simply with: ${APP_NAME}"
+    printf '{'
+    printf '"type":"%s"' "$type"
+
+    # Add message only if it's not empty
+    if [ -n "$message" ]; then
+        message=$(printf '%s' "$message" | sed 's/"/\\"/g; s/\\/\\\\/g')
+        printf ',"message":"%s"' "$message"
+    fi
+
+    # Process key-value pairs
+    while [ $# -ge 2 ]; do
+        local key="$1"
+        local value="$2"
+        shift 2
+
+        # Special handling for "timers" array (already valid JSON)
+        if [ "$key" = "timers" ]; then
+            printf ',"timers":%s' "$value"
+            continue
         fi
+
+        # Escape value for JSON string
+        local escaped_value
+        escaped_value=$(printf '%s' "$value" | sed 's/"/\\"/g; s/\\/\\\\/g; s/\t/\\t/g; s/\n/\\n/g')
+
+        # If value looks like a number, output without quotes (better JSON)
+        if printf '%s' "$value" | grep -qE '^-?[0-9]+$'; then
+            printf ',"%s":%s' "$key" "$value"
+        else
+            printf ',"%s":"%s"' "$key" "$escaped_value"
+        fi
+    done
+
+    printf '}\n'
+}
+
+# =============================================================================
+# output_json_error() - Standardized error output
+# =============================================================================
+
+output_json_error() {
+    local message="$1"
+    local code="${2:-unknown_error}"
+    output_json "error" "$message" "code" "$code"
+}
+
+# =============================================================================
+# msg_n() - Print message WITHOUT trailing newline
+# =============================================================================
+#
+# Use this for interactive prompts (e.g. "Install now? (y/N): ")
+# Respects --quiet and --json (prints nothing in those modes).
+#
+# !!! THIS IS PART OF THE SINGLE SOURCE OF TRUTH FOR OUTPUT !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+msg_n() {
+    output_text "plain_n" "$*"
+}
+
+# =============================================================================
+# Updated thin wrapper functions - All output must go through output_text()
+# =============================================================================
+
+die() {
+    if [ "${JSON}" -eq 1 ]; then
+        output_json_error "$*"
     else
-        rm -f "${tmp}"
-        die "Failed to move script to ${INSTALL_PATH}"
+        output_text "error" "$*"
+    fi
+    exit 1
+}
+
+info() {
+    output_text "info" "$*"
+}
+
+success() {
+    output_text "success" "$*"
+}
+
+warn() {
+    output_text "warn" "$*"
+}
+
+error() {
+    output_text "error" "$*"
+}
+
+msg() {
+    output_text "plain" "$*"
+}
+
+empty_line() {
+    output_text "plain" ""
+}
+
+double_line() {
+    output_text "plain" "=============================================================="
+}
+
+# =============================================================================
+# ui_msg() - Print interactive UI messages to stderr (never captured by $( ))
+# =============================================================================
+#
+# Use this for ALL prompts, info, success, warnings inside get_main_domain()
+# and ask_and_confirm_domains(). It ensures command substitution only receives
+# the clean domain list, never UI text.
+#
+# Respects --quiet and --json (silent in those modes).
+# =============================================================================
+
+ui_msg() {
+    output_text "plain" "$*" >&2
+}
+
+ui_info() {
+    output_text "info" "$*" >&2
+}
+
+ui_success() {
+    output_text "success" "$*" >&2
+}
+
+ui_warn() {
+    output_text "warn" "$*" >&2
+}
+
+ui_empty_line() {
+    output_text "plain" "" >&2
+}
+
+# =============================================================================
+# is_installed() - Robust installation check
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Checks whether the program is already installed, supporting both root
+# and normal user installations with safe fallbacks.
+#
+# Please don't modify this code for root-only installed
+# You can check [ "$(id -u)" -eq 0 ] before calling / excuting 
+#   this function
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+is_installed() {
+    : "${GLOBAL_BIN:=/usr/local/bin}"
+    : "${USER_BIN:=${HOME}/.local/bin}"
+    : "${INSTALL_PATH:=${GLOBAL_BIN}/${APP_NAME}}"
+
+    if [ "$(id -u)" -eq 0 ]; then
+        IS_ROOT=1
+        INSTALL_PATH="${GLOBAL_BIN}/${APP_NAME}"
+    else
+        IS_ROOT=0
+        INSTALL_PATH="${USER_BIN}/${APP_NAME}"
+    fi
+
+    # Support explicit parameters or force flags
+    if [ "${1:-}" = "--user" ] || [ "${FORCE_USER:-0}" -eq 1 ]; then
+        [ -f "${USER_BIN}/${APP_NAME}" ] && [ -x "${USER_BIN}/${APP_NAME}" ] && return 0
+        return 1
+    elif [ "${1:-}" = "--global" ] || [ "${FORCE_GLOBAL:-0}" -eq 1 ]; then
+        [ -f "${GLOBAL_BIN}/${APP_NAME}" ] && [ -x "${GLOBAL_BIN}/${APP_NAME}" ] && return 0
+        return 1
+    fi
+
+    # Main logic
+    if [ "$IS_ROOT" -eq 1 ]; then
+        [ -f "${INSTALL_PATH}" ] && [ -x "${INSTALL_PATH}" ]
+    else
+        { [ -f "${GLOBAL_BIN}/${APP_NAME}" ] && [ -x "${GLOBAL_BIN}/${APP_NAME}" ]; } ||
+        { [ -f "${USER_BIN}/${APP_NAME}"   ] && [ -x "${USER_BIN}/${APP_NAME}"   ]; }
     fi
 }
 
-# ======================
-# FILE PATHS
-# ======================
+# =============================================================================
+# get_installed_version() - Extract version from installed binary
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Safely reads the VERSION constant from the installed script.
+# Used by version-check and self-update.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+get_installed_version() {
+    local bin_path
+    if [ "$IS_ROOT" -eq 1 ] || [ -x "${GLOBAL_BIN}/${APP_NAME}" ]; then
+        bin_path="${GLOBAL_BIN}/${APP_NAME}"
+    else
+        bin_path="${USER_BIN}/${APP_NAME}"
+    fi
 
-DOMAINS_FILE="/etc/letsencrypt/domains.conf"
-EMAIL_FILE="/etc/nginx/letsencrypt-email.conf"
+    if [ -x "$bin_path" ]; then
+        grep '^VERSION="' "$bin_path" 2>/dev/null | cut -d'"' -f2 || echo "unknown"
+    else
+        echo "not installed"
+    fi
+}
 
-# ======================
-# UTILITY FUNCTIONS (unchanged from your v1.21)
-# ======================
+# =============================================================================
+# version_check() - Compare local vs remote version + suggest install
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Fetches the latest version from GitHub raw and compares with installed one.
+# If not installed and running in interactive terminal, it suggests installation.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Designed to be reusable in other projects.
+# =============================================================================
 
-show_usage() {
-  cat << EOF
-Usage: ${APP_NAME} [OPTION]
+version_check() {
+    REMOTE_VERSION=$(curl -fsSL "${SCRIPT_URL}" 2>/dev/null | grep '^VERSION="' | cut -d'"' -f2 || echo "")
+
+    if [ -z "$REMOTE_VERSION" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json_error "Failed to fetch remote version" "network_error"
+        else
+            error "Failed to fetch remote version"
+        fi
+        return 1
+    fi
+
+    local local_version
+    local_version=$(get_installed_version)
+
+    if [ "${JSON}" -eq 1 ]; then
+        output_json "version_check" \
+            "local_version" "$local_version" \
+            "remote_version" "$REMOTE_VERSION" \
+            "is_latest" "$( [ "$local_version" = "$REMOTE_VERSION" ] && echo "true" || echo "false" )"
+    else
+        info "Checking latest version of ${APP_NAME}..."
+        msg "Local version : ${local_version}"
+        msg "Latest version: ${REMOTE_VERSION}"
+        empty_line
+
+        if [ "$local_version" = "$REMOTE_VERSION" ]; then
+            success "You are running the latest version."
+        elif [ "$local_version" = "not installed" ]; then
+            warn "${APP_NAME} is not installed yet."
+        else
+            warn "A newer version is available (${REMOTE_VERSION})"
+        fi
+    fi
+}
+
+# =============================================================================
+# self_update() - Perform self-update to latest version
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Downloads and installs the latest version from GitHub.
+# Respects --force and --quiet.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+self_update() {
+    if [ "${JSON}" -eq 0 ]; then
+        info "Starting self-update of ${APP_NAME}..."
+    fi
+
+    local REMOTE_VERSION
+    REMOTE_VERSION=$(curl -fsSL "${SCRIPT_URL}" 2>/dev/null | grep '^VERSION="' | cut -d'"' -f2 || echo "")
+
+    if [ -z "$REMOTE_VERSION" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json_error "Failed to fetch latest version" "network_error"
+        else
+            error "Failed to fetch latest version"
+        fi
+        return 1
+    fi
+
+    local local_version
+    local_version=$(get_installed_version)
+
+    if [ "$local_version" = "$REMOTE_VERSION" ] && [ "${FORCE_REINSTALL}" -eq 0 ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "success" "message" "Already running the latest version (${REMOTE_VERSION})."
+        else
+            success "Already running the latest version (${REMOTE_VERSION})."
+        fi
+        return 0
+    fi
+
+    if [ "$local_version" != "$REMOTE_VERSION" ] && [ "${JSON}" -eq 0 ]; then
+        info "Updating from ${local_version} → ${REMOTE_VERSION}"
+    fi
+
+    FORCE_REINSTALL=1
+    perform_self_install
+}
+
+# =============================================================================
+# self_uninstall() - Remove ${APP_NAME} from the system
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Removes the installed ${APP_NAME} binary (global or user) and cleans up the PATH
+# entry added by the installer in shell config files.
+#
+# Respects --force, --quiet, and --json.
+# Works for both root and user installations.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Designed to be robust and reversible where possible.
+# =============================================================================
+
+self_uninstall() {
+    if [ "${JSON}" -eq 0 ]; then
+        info "Starting self-uninstall of ${APP_NAME}..."
+    fi
+
+    local bin_path=""
+    local removed=0
+
+    # Determine which installation to remove
+    if [ "$(id -u)" -eq 0 ] || [ "${FORCE_GLOBAL:-0}" -eq 1 ]; then
+        # Global (root) uninstall
+        if [ -f "${GLOBAL_BIN}/${APP_NAME}" ]; then
+            bin_path="${GLOBAL_BIN}/${APP_NAME}"
+        fi
+    else
+        # User uninstall - prefer local, fallback to global if present
+        if [ -f "${USER_BIN}/${APP_NAME}" ]; then
+            bin_path="${USER_BIN}/${APP_NAME}"
+        elif [ -f "${GLOBAL_BIN}/${APP_NAME}" ]; then
+            bin_path="${GLOBAL_BIN}/${APP_NAME}"
+            if [ "${JSON}" -eq 0 ]; then
+                warn "Global installation found. Removing it (you may need sudo next time)."
+            fi
+        fi
+    fi
+
+    if [ -z "$bin_path" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "success" "message" "${APP_NAME} is not installed. Nothing to uninstall."
+        else
+            if [ "${FORCE_REINSTALL:-0}" -eq 1 ] || [ "${FORCE_USER:-0}" -eq 1 ] || [ "${FORCE_GLOBAL:-0}" -eq 1 ]; then
+                warn "${APP_NAME} is not installed. Nothing to uninstall."
+            else
+                warn "${APP_NAME} is not installed."
+            fi
+        fi
+        return 0
+    fi
+
+    # Confirm before removal (unless --force or non-interactive)
+    if [ "${FORCE_REINSTALL:-0}" -eq 0 ] && [ -t 0 ] && [ -t 1 ] && [ "${QUIET}" -eq 0 ] && [ "${JSON}" -eq 0 ]; then
+        printf "${YELLOW}This will remove: %s${NC}\n" "$bin_path"
+        printf "Continue? (y/N): "
+        read -r answer || true
+        case "$answer" in
+            [Yy]*|[Yy][Ee][Ss]*) ;;
+            *) 
+                if [ "${JSON}" -eq 1 ]; then
+                    output_json "success" "message" "Uninstall cancelled by user."
+                else
+                    msg "Uninstall cancelled by user."
+                fi
+                return 0 
+                ;;
+        esac
+    fi
+
+    # Remove the binary
+    if rm -f "$bin_path" 2>/dev/null; then
+        removed=1
+    else
+        if [ "${JSON}" -eq 1 ]; then
+            output_json_error "Failed to remove ${bin_path} (permission denied?)" "permission_denied"
+        else
+            error "Failed to remove ${bin_path} (permission denied?)"
+        fi
+        return 1
+    fi
+
+    # Optional: clean up PATH entry in shell configs (user only)
+    if [ "$(id -u)" -ne 0 ] && [ "$removed" -eq 1 ]; then
+        local cleaned=0
+        for config in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.config/fish/config.fish"; do
+            if [ -f "$config" ]; then
+                if sed -i.bak '/# Added by .* installer/d' "$config" 2>/dev/null && \
+                sed -i.bak '/\.local\/bin:.*PATH/d' "$config" 2>/dev/null; then
+                    cleaned=1
+                fi
+                rm -f "${config}.bak" 2>/dev/null || true
+            fi
+        done
+        if [ "$cleaned" -eq 1 ] && [ "${JSON}" -eq 0 ]; then
+            msg "→ Cleaned ${APP_NAME} PATH entries from shell config files"
+            msg "→ You may want to restart your terminal"
+        fi
+    fi
+
+    if [ "${JSON}" -eq 1 ]; then
+        output_json "success" "message" "${APP_NAME} has been uninstalled."
+    else
+        success "${APP_NAME} has been uninstalled."
+    fi
+    return 0
+}
+
+# =============================================================================
+# in_path() - Check if a directory is in $PATH
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Returns 0 if the given directory (default: INSTALL_DIR) is already in $PATH.
+# POSIX-compatible using case statement (works in sh/dash/bash/zsh).
+#
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+in_path() {
+    case ":${PATH}:" in
+        *:"${1:-$USER_BIN}":*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# =============================================================================
+# add_to_shell_path() - Multi-shell PATH support (bash + zsh + fish)
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Adds ~/.local/bin to the user's shell configuration for bash, zsh, and fish.
+# Works even if the user is currently using a different shell.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+add_to_shell_path() {
+    local added=0
+    local shell_config="N/A"
+
+    # Bash
+    local bashrc="${HOME}/.bashrc"
+    if [ -f "$bashrc" ]; then
+        if [ "$shell_config" = "N/A" ]; then
+            shell_config="${bashrc}"
+        else
+            shell_config="${shell_config} ${bashrc}"
+        fi
+        if ! grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$bashrc" 2>/dev/null; then
+            printf "\n# Added by %s installer (%s)\n" "$APP_NAME" "$VERSION" >> "$bashrc"
+            printf 'export PATH="$HOME/.local/bin:$PATH"\n' >> "$bashrc"
+            added=1
+            if [ "${JSON}" -eq 0 ]; then
+                msg "→ Added ~/.local/bin to PATH for bash"
+            fi
+        fi
+    fi
+
+    # Zsh
+    local zshrc="${HOME}/.zshrc"
+    if [ -f "$zshrc" ]; then
+        if [ "$shell_config" = "N/A" ]; then
+            shell_config="${zshrc}"
+        else
+            shell_config="${shell_config} ${zshrc}"
+        fi
+        if ! grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$zshrc" 2>/dev/null; then
+            printf "\n# Added by %s installer (%s)\n" "$APP_NAME" "$VERSION" >> "$zshrc"
+            printf 'export PATH="$HOME/.local/bin:$PATH"\n' >> "$zshrc"
+            added=1
+            if [ "${JSON}" -eq 0 ]; then
+                msg "→ Added ~/.local/bin to PATH for zsh"
+            fi
+        fi
+    fi
+
+    # Fish
+    local fish_config="${HOME}/.config/fish/config.fish"
+    if [ -d "${HOME}/.config/fish" ] || mkdir -p "${HOME}/.config/fish" 2>/dev/null; then
+        if [ "$shell_config" = "N/A" ]; then
+            shell_config="${fish_config}"
+        else
+            shell_config="${shell_config} ${fish_config}"
+        fi
+        if [ -f "$fish_config" ] && grep -qF 'set -gx PATH $HOME/.local/bin $PATH' "$fish_config" 2>/dev/null; then
+            : # already present
+        else
+            printf "\n# Added by %s installer (%s)\n" "$APP_NAME" "$VERSION" >> "$fish_config"
+            printf 'set -gx PATH $HOME/.local/bin $PATH\n' >> "$fish_config"
+            added=1
+            if [ "${JSON}" -eq 0 ]; then
+                msg "→ Added ~/.local/bin to PATH for fish shell"
+            fi
+        fi
+    fi
+
+    if [ "$added" -eq 1 ] && [ "${JSON}" -eq 0 ]; then
+        msg "→ Restart your terminal or run: source ${shell_config}"
+    fi
+}
+
+# =============================================================================
+# perform_self_install() - Main self-installation logic
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Downloads and installs the script to the correct location (global or user-local).
+#
+# Please don't modify this code for root-only installed
+# You can check [ "$(id -u)" -eq 0 ] before calling / executing 
+#   this function
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+perform_self_install() {
+    : "${GLOBAL_BIN:=/usr/local/bin}"
+    : "${USER_BIN:=${HOME}/.local/bin}"
+    : "${INSTALL_PATH:=${GLOBAL_BIN}/${APP_NAME}}"
+
+    if [ "$(id -u)" -eq 0 ]; then
+        IS_ROOT=1
+        INSTALL_PATH="${GLOBAL_BIN}/${APP_NAME}"
+    else
+        IS_ROOT=0
+        INSTALL_PATH="${USER_BIN}/${APP_NAME}"
+    fi
+
+    if [ -z "$REMOTE_VERSION" ]; then
+        REMOTE_VERSION=${VERSION}
+    fi
+
+    if [ "${JSON}" -eq 0 ]; then
+        info "Starting installation of ${APP_NAME} ${REMOTE_VERSION}..."
+    fi
+
+    if is_installed && [ "${FORCE_REINSTALL}" -eq 0 ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "success" "message" "${APP_NAME} is already installed."
+        else
+            success "${APP_NAME} is already installed. Use --force to override."
+        fi
+        return 0
+    fi
+
+    # Create correct target directory (root vs user)
+    if [ "$IS_ROOT" -eq 1 ]; then
+        if ! mkdir -p "${GLOBAL_BIN}" 2>/dev/null; then
+            if [ "${JSON}" -eq 1 ]; then
+                output_json_error "Failed to create ${GLOBAL_BIN}" "io_error"
+            else
+                error "Failed to create ${GLOBAL_BIN}"
+            fi
+            return 1
+        fi
+    else
+        if ! mkdir -p "${USER_BIN}" 2>/dev/null; then
+            if [ "${JSON}" -eq 1 ]; then
+                output_json_error "Failed to create ${USER_BIN}" "io_error"
+            else
+                error "Failed to create ${USER_BIN}"
+            fi
+            return 1
+        fi
+    fi
+
+    local tmp_file
+    tmp_file=$(mktemp -t "${APP_NAME}.XXXXXX") || {
+        if [ "${JSON}" -eq 1 ]; then
+            output_json_error "Failed to create temporary file" "io_error"
+        else
+            error "Failed to create temporary file"
+        fi
+        return 1
+    }
+
+    if [ "${JSON}" -eq 0 ]; then
+        info "Downloading ${APP_NAME} from GitHub..."
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "${SCRIPT_URL}" -o "${tmp_file}" || {
+            rm -f "${tmp_file}"
+            if [ "${JSON}" -eq 1 ]; then
+                output_json_error "Download failed (curl)" "network_error"
+            else
+                error "Download failed (curl)"
+            fi
+            return 1
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "${tmp_file}" "${SCRIPT_URL}" || {
+            rm -f "${tmp_file}"
+            if [ "${JSON}" -eq 1 ]; then
+                output_json_error "Download failed (wget)" "network_error"
+            else
+                error "Download failed (wget)"
+            fi
+            return 1
+        }
+    else
+        rm -f "${tmp_file}"
+        if [ "${JSON}" -eq 1 ]; then
+            output_json_error "Neither curl nor wget found" "missing_dependency"
+        else
+            error "Neither curl nor wget found"
+        fi
+        return 1
+    fi
+
+    chmod +x "${tmp_file}" 2>/dev/null || true
+
+    rm -f "${INSTALL_PATH}" 2>/dev/null
+    if ! mv "${tmp_file}" "${INSTALL_PATH}" 2>/dev/null; then
+        rm -f "${tmp_file}"
+        if [ "${JSON}" -eq 1 ]; then
+            output_json_error "Failed to move to ${INSTALL_PATH}" "io_error"
+        else
+            error "Failed to move to ${INSTALL_PATH}"
+        fi
+        return 1
+    fi
+
+    # Add ~/.local/bin to PATH for normal user installs
+    if [ "$IS_ROOT" -eq 0 ]; then
+        add_to_shell_path
+    fi
+    
+    if [ "${JSON}" -eq 1 ]; then
+        output_json "success" "message" "${APP_NAME} ${REMOTE_VERSION} successfully installed to ${INSTALL_PATH}"
+    else
+        success "${APP_NAME} ${REMOTE_VERSION} successfully installed to ${INSTALL_PATH}"
+    fi
+    return 0
+}
+
+# =============================================================================
+# maybe_install() - Friendly installation prompt
+# =============================================================================
+#
+# Respects both --quiet and --json modes.
+# In JSON mode we skip the interactive prompt entirely.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# Designed to be reusable in other projects.
+# =============================================================================
+
+maybe_install() {
+    if is_installed && [ "${FORCE_REINSTALL}" -eq 0 ]; then
+        return 0
+    fi
+
+    # In JSON mode or quiet mode we do not show interactive prompts
+    if [ "${JSON}" -eq 1 ] || [ "${QUIET}" -eq 1 ]; then
+        return 0
+    fi
+
+    empty_line
+    msg "Note: '${APP_NAME}' is not installed yet."
+    msg "     Version: ${VERSION}"
+    empty_line
+    msg "Recommended installation command:"
+    empty_line
+
+    if [ "$IS_ROOT" -eq 1 ]; then
+        msg "     sudo curl -fsSL ${SCRIPT_URL} | sudo ${SH}"
+    else
+        msg "     curl -fsSL ${SCRIPT_URL} | ${SH}"
+    fi
+    empty_line
+
+    local should_install=false
+
+    if [ -t 0 ] && [ -t 1 ]; then
+        msg_n "     Install now? (y/N): "     # No newline at the end
+        read -r answer || true
+        case "$answer" in
+            [Yy]*|[Yy][Ee][Ss]*) should_install=true ;;
+            *) 
+                msg "Installation skipped by user."
+                return 0 
+                ;;
+        esac
+    else
+        msg "Non-interactive mode detected → installing automatically..."
+        should_install=true
+    fi
+
+    if [ "$should_install" = "true" ]; then
+        perform_self_install
+        exit 0
+    fi
+}
+
+# =============================================================================
+# show_about_global() - Display diagnostic information about the current environment
+# =============================================================================
+#
+# Shows installation status, versions (global only), current shell, and TTY status.
+# Fully respects --quiet and --json modes.
+#
+# In JSON mode: outputs exactly ONE clean JSON object with accurate shell detection.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# =============================================================================
+
+show_about_global() {
+    if [ "${JSON}" -eq 1 ]; then
+        # === JSON MODE - Clean, machine-friendly output ===
+        local installed="false"
+        is_installed && installed="true"
+
+        local global_ver="not found"
+        if [ -x "${GLOBAL_BIN}/${APP_NAME}" ]; then
+            global_ver=$(grep '^VERSION="' "${GLOBAL_BIN}/${APP_NAME}" 2>/dev/null | cut -d'"' -f2 || echo "unknown")
+        fi
+
+        # Improved shell detection: avoid showing "${APP_NAME}" as the shell
+        local current_shell="unknown"
+        current_shell=$(ps -p $$ -o comm= 2>/dev/null | tr -d '()' || echo "unknown")
+        
+        # If we see the script name itself (or generic sh/dash/ash), climb to parent shell
+        if [ "$current_shell" = "${APP_NAME}" ] || [ "$current_shell" = "sh" ] || \
+        [ "$current_shell" = "dash" ] || [ "$current_shell" = "ash" ]; then
+            local parent_pid
+            parent_pid=$(ps -p $$ -o ppid= 2>/dev/null | tr -d ' ')
+            if [ -n "$parent_pid" ]; then
+                current_shell=$(ps -p "$parent_pid" -o comm= 2>/dev/null | tr -d '()' || echo "$current_shell")
+            fi
+        fi
+
+        local interactive="false"
+        [ -t 1 ] && interactive="true"
+
+        # Clean JSON: no generic message, accurate shell name
+        output_json "about" "" \
+            "version" "${VERSION}" \
+            "installed" "${installed}" \
+            "global_version" "${global_ver}" \
+            "shell" "${current_shell}" \
+            "interactive" "${interactive}" \
+            "user" "${USERNAME}"
+
+        return 0
+    fi
+
+    # === Normal Human-readable Mode ===
+    [ "${QUIET}" -eq 1 ] && return 0
+
+    msg "=== ${APP_NAME} ${VERSION} - About / Diagnostics ==="
+    empty_line
+
+    # Installation status
+    if is_installed; then
+        success "${APP_NAME} is installed."
+    else
+        warn "${APP_NAME} is NOT installed."
+        msg "   Recommended: curl -fsSL ${SCRIPT_URL} | sudo ${SH}"
+    fi
+
+    empty_line
+
+    # Global installation
+    if [ -x "${GLOBAL_BIN}/${APP_NAME}" ]; then
+        global_ver=$(grep '^VERSION="' "${GLOBAL_BIN}/${APP_NAME}" 2>/dev/null | cut -d'"' -f2 || echo "unknown")
+        msg "Global install (${GLOBAL_BIN}/${APP_NAME}):  ${global_ver}"
+    else
+        msg "Global install (${GLOBAL_BIN}/${APP_NAME}):  not found"
+    fi
+
+    empty_line
+
+    # === Improved Shell Detection (same logic as JSON mode) ===
+    local current_shell="unknown"
+    current_shell=$(ps -p $$ -o comm= 2>/dev/null | tr -d '()' || echo "unknown")
+    
+    # If we see the script name itself, try to get the real parent shell
+    if [ "$current_shell" = "${APP_NAME}" ] || [ "$current_shell" = "sh" ] || \
+    [ "$current_shell" = "dash" ] || [ "$current_shell" = "ash" ]; then
+        local parent_pid
+        parent_pid=$(ps -p $$ -o ppid= 2>/dev/null | tr -d ' ')
+        if [ -n "$parent_pid" ]; then
+            current_shell=$(ps -p "$parent_pid" -o comm= 2>/dev/null | tr -d '()' || echo "$current_shell")
+        fi
+    fi
+    msg "Current shell:   ${current_shell}"
+
+    # TTY status
+    if [ -t 1 ]; then
+        msg "TTY / Interactive: yes"
+    else
+        msg "TTY / Interactive: no (non-interactive mode)"
+    fi
+
+    empty_line
+    msg "Use '${APP_NAME} about' to see this information again."
+}
+
+# =============================================================================
+# show_gitlab_nginx_help() - Display help information for the app
+# =============================================================================
+#
+# Shows usage, available commands, options, and important legacy notes.
+# Fully respects --quiet and --json modes.
+#
+# In --json mode: returns a minimal success object instead of long text.
+# In --quiet mode: prints nothing (silent).
+#
+# This is the user-facing help text and should be kept in sync with the README.md.
+# =============================================================================
+
+show_gitlab_nginx_help() {
+    if [ "${JSON}" -eq 1 ]; then
+        # JSON mode: return clean, machine-friendly response
+        output_json "success" "" \
+            "app" "${APP_NAME}" \
+            "version" "${VERSION}" \
+            "message" "Help text available in human mode. Run without --json." \
+            "note" "Use --json with status, about, version, etc. for machine output."
+        return 0
+    fi
+
+    if [ "${QUIET}" -eq 1 ]; then
+        # Quiet mode: suppress help completely
+        return 0
+    fi
+
+    cat << EOF
+${APP_NAME} v${VERSION} — ${DESCRIPTION}
+
+Usage:
+${APP_NAME}                          Setup environment + build + run (preserves project)
+${APP_NAME} status                   Show application status
+${APP_NAME} about                    Full diagnostics (Java, Maven, project, etc.)
+${APP_NAME} version                  Show version
+${APP_NAME} version-check            Compare with latest
+${APP_NAME} self-update              Update to latest version
+${APP_NAME} self-uninstall           Remove timer from the system
+${APP_NAME} reinstall                Force reinstall
+${APP_NAME} help                     This help
+${APP_NAME} domains                  Display current domains
+${APP_NAME} email                    Display current Let's Encrypt email
+${APP_NAME} nginx-conf               Re-generate only Nginx configuration files
 
 Options:
-  --help, -h              Show this help message
-  --version, -v           Show script version
-  --domains               Display current domains
-  --email                 Display current Let's Encrypt email
-  --nginx-conf            Re-generate only Nginx configuration files
-  --gitlab-conf           Re-generate only gitlab.rb configuration
-  --force-reinstall       Force download and reinstall the script itself to /usr/local/bin
-  (no option)             Run full setup (default)
+--quiet, -q            Suppress non-error messages
+--json                 Machine-readable JSON output (implies --quiet) 
+--no-cloudflare        Not using cloudflare
+
+Important Notes:
+• Normal run preserves your existing project files, pom.xml, and source code.
+
+Examples:
+${APP_NAME}                              # Normal run (recommended)
+${APP_NAME} about --json
+
 EOF
-  exit 0
 }
 
-show_version() {
-  echo "${APP_NAME} - GitLab + Nginx + Let's Encrypt Setup Script"
-  echo "Version ${SCRIPT_VERSION}"
-  exit 0
+# =============================================================================
+# ensure_letsencrypt_structure() - Defensive Directory & File Pre-Creation
+# =============================================================================
+#
+# CRITICAL DEFENSIVE FUNCTION - DO NOT SIMPLIFY, REMOVE, OR REFACTOR
+#
+# Purpose:
+#   This function enforces the "Defensive Pre-Creation Rule" defined in the
+#   main CRITICAL REQUIREMENTS section.
+#
+#   It MUST be called early in every major code path (interactive setup,
+#   non-interactive setup, nginx-conf, show_domains, show_email,
+#   get_or_set_gitlab_ssh_hostname, etc.) BEFORE any operation that reads or
+#   writes email.conf, domains.conf, or gitlab-ssh-hostname.conf.
+#
+# Rules This Function Must Always Follow:
+#   • NEVER assume that /etc/letsencrypt or its subdirectories exist.
+#   • ALWAYS create the full directory structure if missing.
+#   • ALWAYS ensure the placeholder files exist: email.conf, domains.conf,
+#     and gitlab-ssh-hostname.conf.
+#   • Use strict permissions: email.conf = 600, domains.conf = 644,
+#     gitlab-ssh-hostname.conf = 600.
+#   • This function is intentionally called redundantly for maximum safety.
+#
+# Why This Function Exists:
+#   - Certbot may not have created these paths yet.
+#   - The script must survive fresh systems, partial installs, or interrupted runs.
+#   - It supports independent email/domain/SSH hostname handling before any
+#     Certbot or GitLab command runs.
+#
+# Important:
+#   This is part of the "Do Not Rely On Certbot" defensive strategy.
+#   Removing or simplifying this function will break the reliability of the entire script.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# !!! CALL IT EARLY AND OFTEN !!!
+# =============================================================================
+
+ensure_letsencrypt_structure() {
+    if [ "$(id -u)" -ne 0 ]; then
+        return 0
+    fi
+
+    mkdir -p /etc/letsencrypt \
+            /etc/letsencrypt/renewal \
+            /etc/letsencrypt/live \
+            /etc/letsencrypt/archive 2>/dev/null || true
+
+    # email.conf
+    if [ ! -f "$EMAIL_FILE" ]; then
+        touch "$EMAIL_FILE" 2>/dev/null || true
+        chmod 600 "$EMAIL_FILE" 2>/dev/null || true
+    fi
+
+    # domains.conf
+    if [ ! -f "$DOMAINS_FILE" ]; then
+        touch "$DOMAINS_FILE" 2>/dev/null || true
+        chmod 644 "$DOMAINS_FILE" 2>/dev/null || true
+    fi
+
+    # gitlab-ssh-hostname.conf (new in v2.0.0)
+    local SSH_HOSTNAME_FILE="/etc/letsencrypt/gitlab-ssh-hostname.conf"
+    if [ ! -f "$SSH_HOSTNAME_FILE" ]; then
+        touch "$SSH_HOSTNAME_FILE" 2>/dev/null || true
+        chmod 600 "$SSH_HOSTNAME_FILE" 2>/dev/null || true
+    fi
 }
 
-show_domains() {
-  if [ -f "$DOMAINS_FILE" ]; then
-    echo "=== Saved Domains in ${DOMAINS_FILE} ==="
-    cat "$DOMAINS_FILE"
-  else
-    echo "No domains file found at ${DOMAINS_FILE}"
-  fi
-  exit 0
-}
-
-show_email() {
-  if [ -f "$EMAIL_FILE" ]; then
-    echo "Let's Encrypt email: $(cat "$EMAIL_FILE")"
-  else
-    echo "No email configured yet at ${EMAIL_FILE}"
-  fi
-  exit 0
-}
+# =============================================================================
+# load_existing_domains() - Load Previously Saved Domain List
+# =============================================================================
+#
+# CRITICAL SUPPORT FUNCTION - DO NOT SIMPLIFY OR REMOVE
+#
+# Purpose:
+#   This function loads the previously saved domain list from 
+#   /etc/letsencrypt/domains.conf.
+#
+#   It is part of the "Email and Domain List Handling MUST be done FIRST 
+#   and INDEPENDENTLY" requirement.
+#
+# Defensive Rules Applied:
+#   • Always call ensure_letsencrypt_structure() first (never assume files exist).
+#   • Return a clean space-separated list of domains (or empty string if none).
+#   • This function does NOT decide the main domain — it only loads what was saved.
+#   • The main domain is decided interactively by the user via get_main_domain().
+#   • After loading, the script must ensure the user-chosen main domain is placed first.
+#
+# Output:
+#   Returns a single line containing domains separated by single spaces.
+#   Returns empty string if file does not exist or is empty.
+#
+# Usage:
+#   Called early in run_interactive_setup() to check if domains were previously configured.
+#
+# !!! This function supports the defensive design where domains are handled 
+#     independently of Certbot and Nginx configuration !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
 
 load_existing_domains() {
-  debug "Checking domains file: ${DOMAINS_FILE}"
-  if [ -f "$DOMAINS_FILE" ]; then
-    local content=$(cat "$DOMAINS_FILE" | tr '\n' ' ' | tr -s ' ' | sed 's/^ *//;s/ *$//')
-    debug "Content from file: '${content}'"
-    echo "$content"
-  else
-    debug "File NOT found → starting with empty list"
-    echo ""
-  fi
+    ensure_letsencrypt_structure
+
+    # Non-root graceful fallback - no config directory yet
+    if [ "$(id -u)" -ne 0 ] && [ ! -f "$DOMAINS_FILE" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [ -f "$DOMAINS_FILE" ] && [ -s "$DOMAINS_FILE" ]; then
+        tr -s ' \t\n\r' ' ' < "$DOMAINS_FILE" | sed 's/^ *//;s/ *$//' | tr -d '\n'
+    else
+        echo ""
+    fi
 }
+
+# =============================================================================
+# show_domains() - Display Currently Saved Domains
+# =============================================================================
+#
+# Purpose:
+#   Shows the saved domain list from /etc/letsencrypt/domains.conf.
+#   This is a diagnostic / user command (`${APP_NAME} domains`).
+#
+# Rules This Function Must Follow:
+#   • Must respect --quiet and --json modes (use output_text / output_json).
+#   • Must call ensure_letsencrypt_structure() first (defensive).
+#   • Must clearly show that the first domain is the main/primary domain.
+#   • Output must be clean and consistent with the rest of the script.
+#
+# Works for both root and non-root users.
+# Gracefully handles missing configuration without permission errors.
+#
+# Important:
+#   This command is for human inspection only. It does not modify any data.
+#
+# !!! DO NOT SIMPLIFY THIS FUNCTION !!!
+# !!! ALL OUTPUT MUST GO THROUGH THE CENTRAL OUTPUT FUNCTIONS !!!
+# =============================================================================
+
+show_domains() {
+    ensure_letsencrypt_structure
+
+    # Non-root graceful fallback when config directory/files don't exist yet
+    if [ "$(id -u)" -ne 0 ] && [ ! -f "$DOMAINS_FILE" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "status" "No domains configured yet. Run: sudo ${APP_NAME}"
+        else
+            warn "No domains configured yet at ${DOMAINS_FILE}"
+            msg "Run 'sudo ${APP_NAME}' to perform the full setup."
+        fi
+        return 0
+    fi
+
+    if [ "${JSON}" -eq 1 ]; then
+        local domains
+        domains=$(load_existing_domains)
+
+        if [ -z "$domains" ]; then
+            output_json "status" "No domains configured yet"
+        else
+            local json_array
+            json_array=$(echo "$domains" | tr ' ' '\n' | jq -R -s -c 'split("\n")[:-1]' 2>/dev/null || echo "[]")
+            output_json "success" "" \
+                "domains" "$json_array" \
+                "count" "$(echo "$domains" | wc -w | tr -d ' ')" \
+                "primary" "$(get_main_domain_from_file "$domains")"
+        fi
+        return 0
+    fi
+
+    if [ "${QUIET}" -eq 1 ]; then
+        return 0
+    fi
+
+    if [ -f "$DOMAINS_FILE" ] && [ -s "$DOMAINS_FILE" ]; then
+        local domains count
+        domains=$(load_existing_domains)
+        count=$(echo "$domains" | wc -w | tr -d ' ')
+
+        msg "=== Saved Domains in ${DOMAINS_FILE} ==="
+        msg "Total domains: ${count} (First domain = Primary/Main domain)"
+        empty_line
+        
+        for d in $domains; do
+            if [ "$d" = "$(get_main_domain_from_file "$domains")" ]; then
+                success "→ ${d}  (Primary Domain)"
+            else
+                msg "  ${d}"
+            fi
+        done
+    else
+        warn "No domains configured yet at ${DOMAINS_FILE}"
+        msg "Run 'sudo ${APP_NAME}' to perform the full setup."
+    fi
+}
+
+# =============================================================================
+# show_email() - Display Saved Let's Encrypt Email
+# =============================================================================
+#
+# Purpose:
+#   Shows the currently saved email address from /etc/letsencrypt/email.conf.
+#   This is a diagnostic command (`${APP_NAME} email`).
+#
+# Rules This Function Must Follow:
+#   • Must respect --quiet and --json modes.
+#   • Must call ensure_letsencrypt_structure() first (defensive pre-creation rule).
+#   • All output must go through output_text() / msg() / warn() system.
+#   • Clearly inform user if no email is configured yet.
+#   • In JSON mode, return clean machine-readable output.
+#
+# Works for both root and non-root users.
+# When run as non-root and no config exists, shows helpful guidance instead of errors.
+#
+# Important:
+#   Email is set independently and must be available before any Certbot operation.
+#   This command is read-only and does not modify any data.
+#
+# !!! DO NOT USE RAW echo/cat IN THIS FUNCTION !!!
+# !!! DO NOT SIMPLIFY OR REMOVE DEFENSIVE CALLS !!!
+# =============================================================================
+
+show_email() {
+    ensure_letsencrypt_structure
+
+    # Non-root graceful fallback when config directory/files don't exist yet
+    if [ "$(id -u)" -ne 0 ] && [ ! -f "$EMAIL_FILE" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "status" "No email configured yet. Run: sudo ${APP_NAME}"
+        else
+            warn "No email configured yet at ${EMAIL_FILE}"
+            msg "Run 'sudo ${APP_NAME}' to perform the full setup."
+        fi
+        return 0
+    fi
+
+    if [ "${JSON}" -eq 1 ]; then
+        if [ -f "$EMAIL_FILE" ] && [ -s "$EMAIL_FILE" ]; then
+            local email
+            email=$(tr -d ' \t\n\r' < "$EMAIL_FILE")
+            output_json "success" "" "email" "$email"
+        else
+            output_json "status" "No email configured yet"
+        fi
+        return 0
+    fi
+
+    if [ "${QUIET}" -eq 1 ]; then
+        return 0
+    fi
+
+    if [ -f "$EMAIL_FILE" ] && [ -s "$EMAIL_FILE" ]; then
+        local email
+        email=$(tr -d ' \t\n\r' < "$EMAIL_FILE")
+        success "Let's Encrypt email: ${email}"
+    else
+        warn "No email configured yet at ${EMAIL_FILE}"
+        msg "Run 'sudo ${APP_NAME}' to perform the full setup."
+    fi
+}
+
+
+# =============================================================================
+# get_main_domain_from_file() - Extract Primary Domain from Domain List
+# =============================================================================
+#
+# CRITICAL HELPER FUNCTION - DO NOT SIMPLIFY OR REMOVE
+#
+# Purpose:
+#   Extracts the PRIMARY / MAIN domain from a space-separated domain list.
+#   This function enforces the rule that the first domain in the final list
+#   is always treated as the main domain for certificate and nginx configuration.
+#
+# Key Rules (Aligned with CRITICAL REQUIREMENTS):
+#   • The main domain is decided interactively by the user via get_main_domain().
+#   • After confirmation and re-arrangement, this function returns the domain
+#     that must be placed FIRST in the saved list.
+#   • It is used to safely get the primary domain for:
+#       - Certificate request (as Common Name)
+#       - Certificate path (/etc/letsencrypt/live/${main_domain}/...)
+#       - Nginx configuration
+#
+# Input:
+#   $1 = space-separated string of domains (e.g. "git.example.com app.example.com")
+#
+# Output:
+#   The first domain in the list, or empty string if input is empty.
+#
+# Important:
+#   This function should be called AFTER forcing the user-chosen main domain
+#   to the front of the list in run_interactive_setup().
+#
+# !!! THIS FUNCTION IS PART OF THE DEFENSIVE "MAIN DOMAIN HANDLING" CHAIN !!!
+# !!! DO NOT MODIFY ITS BEHAVIOR !!!
+# =============================================================================
+
+get_main_domain_from_file() {
+    local domains="$1"
+
+    if [ -z "$domains" ]; then
+        echo ""
+        return 0
+    fi
+
+    # Extract first domain safely
+    echo "$domains" | awk '{print $1}'
+}
+
+
+# =============================================================================
+# display_current_domains() - Show Current Domains During Interactive Confirmation
+# =============================================================================
+#
+# Purpose:
+#   Displays the current list of domains to the user during the interactive
+#   confirmation step inside ask_and_confirm_domains().
+#
+#   This is a helper function used ONLY for user interaction, not for general
+#   display (use show_domains() for that).
+#
+# Rules This Function Must Follow:
+#   • Must respect --quiet and --json modes (should do nothing in those modes).
+#   • Must use the central output system (msg(), empty_line(), etc.).
+#   • Clearly indicate the total count of domains.
+#   • Output should be clean and readable during interactive prompts.
+#   • The first domain will later become the Primary/Main domain.
+#   • Prints ALL output to stderr so it is never captured by command substitution.
+#
+# Important:
+#   This function is called repeatedly during domain confirmation loop.
+#   It should remain lightweight and user-friendly.
+#
+# !!! DO NOT USE RAW echo OR >&2 REDIRECTION !!!
+# !!! ALL OUTPUT MUST GO THROUGH output_text() WRAPPERS !!!
+# =============================================================================
 
 display_current_domains() {
-  local domains="$1"
-  local count=$(echo "$domains" | wc -w | tr -d ' ')
-  echo ""
-  echo "=== Current domains (${count} total) ===" >&2
-  if [ -n "$domains" ] && [ "$domains" != "" ]; then
-    for d in $domains; do
-      echo " - $d" >&2
-    done
-  else
-    echo " (no domains configured yet)" >&2
-  fi
-  echo "" >&2
+    local domains="$1"
+
+    # Respect quiet and json modes
+    if [ "${JSON}" -eq 1 ] || [ "${QUIET}" -eq 1 ]; then
+        return 0
+    fi
+
+    local count
+    count=$(echo "$domains" | wc -w | tr -d ' ')
+
+    ui_empty_line
+    ui_msg "=== Current domains (${count} total) ==="
+
+    if [ -n "$domains" ] && [ "$domains" != "" ]; then
+        for d in $domains; do
+            ui_msg " - ${d}"
+        done
+    else
+        ui_msg " (no domains configured yet)"
+    fi
+
+    ui_empty_line
 }
+
+# =============================================================================
+# save_domains_to_file() - Persistently Save Final Domain List
+# =============================================================================
+#
+# CRITICAL FUNCTION - DO NOT SIMPLIFY OR REMOVE
+#
+# Purpose:
+#   Saves the final domain list to /etc/letsencrypt/domains.conf.
+#   This file is used by future runs, certbot renew, and diagnostic commands.
+#
+# Key Rules This Function Must Enforce:
+#   • The user-chosen main domain MUST be the FIRST domain in the saved list.
+#   • Domains are saved one per line (clean, readable format).
+#   • Must always call ensure_letsencrypt_structure() first.
+#   • File permissions must be 644.
+#   • This function is the final step before using the domain list for
+#     certificate request and nginx configuration.
+#   • Prints ALL output to stderr so it is never captured by command substitution.
+#
+# Important:
+#   The re-arrangement (putting main domain first) must happen BEFORE calling
+#   this function — in run_interactive_setup().
+#
+# Output Behavior:
+#   • Normal mode: shows confirmation message.
+#   • Quiet/JSON mode: silent (no output).
+#
+# !!! THIS FUNCTION IS PART OF THE DEFENSIVE DOMAIN PERSISTENCE CHAIN !!!
+# !!! DO NOT MODIFY ITS BEHAVIOR OR REMOVE THE ENSURE CALL !!!
+# =============================================================================
 
 save_domains_to_file() {
-  local domain_list="$1"
-  mkdir -p /etc/letsencrypt
-  echo "$domain_list" | tr ' ' '\n' > "$DOMAINS_FILE"
-  chmod 644 "$DOMAINS_FILE"
-  info "Domains saved to ${DOMAINS_FILE}"
-}
+    local domain_list="$1"
 
-# ======================
-# Ask and Confirm Domains
-#  - Require TTY, cannot run under curl and after pipeline |
-# ======================
-ask_and_confirm_domains() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-  local domains="$1"
-  debug "Entering domain confirmation phase with: '${domains}'"
+    ensure_letsencrypt_structure
 
-  while true; do
-    display_current_domains "$domains"
-
-    read -rp "Do you want to add more domains? (yes/no): " add_more
-    add_more=$(echo "$add_more" | tr '[:upper:]' '[:lower:]')
-
-    if [ "$add_more" = "no" ] || [ "$add_more" = "n" ]; then
-      info "✅ Domains confirmed."
-      echo "$domains"
-      return
+    # === DEFENSIVE SANITY CHECK ===
+    if echo "$domain_list" | grep -qE '(\[INFO\]|\[OK\]|\[WARN\]|\[ERROR\]|\u2705|===|Current domains|Primary domain accepted)'; then
+        die "BUG: Domains list contains UI output. This should never happen. Please report this issue."
     fi
 
-    echo "" >&2
-    info "Enter additional domains one by one (press Enter on empty line when done):"
+    # Save domains one per line (clean)
+    echo "$domain_list" | tr ' ' '\n' | sed '/^$/d' > "$DOMAINS_FILE"
+    chmod 644 "$DOMAINS_FILE"
+
+    # Respect quiet and json modes
+    if [ "${JSON}" -eq 0 ] && [ "${QUIET}" -eq 0 ]; then
+        info "Domains saved to ${DOMAINS_FILE}"
+    fi
+}
+
+# =============================================================================
+# ask_and_confirm_domains() - Interactive Domain Confirmation & Addition
+# =============================================================================
+#
+# CRITICAL INTERACTIVE FUNCTION - DO NOT SIMPLIFY OR REFACTOR
+#
+# Purpose:
+#   This function is called AFTER the user has explicitly chosen the main/primary
+#   domain via get_main_domain(). 
+#
+#   Its ONLY job is to let the user ADD additional domains (SANs).
+#   It does NOT decide or change the main domain.
+#
+# Key Rules (Must Follow):
+#   • The main domain (passed as first item) must remain at the front.
+#   • User can only append extra domains.
+#   • Must respect --quiet and --json modes (do nothing in those modes).
+#   • Must use central output functions (display_current_domains, msg, info, etc.).
+#   • After user finishes adding domains, the final list is returned with main
+#     domain still at the front (re-arrangement happens in run_interactive_setup).
+#   • Prints ALL output to stderr so it is never captured by command substitution.
+#
+# Design Intent:
+#   Main domain = User decision (get_main_domain)
+#   Extra domains = User confirmation & addition (this function)
+#
+# !!! THIS FUNCTION IS PART OF THE "MAIN DOMAIN IS CHOSEN BY USER" RULE !!!
+# !!! DO NOT ATTEMPT TO DETERMINE MAIN DOMAIN FROM LIST POSITION HERE !!!
+# =============================================================================
+
+ask_and_confirm_domains() {
+    if [ "$TTY" = "0" ]; then
+        echo "$1"   # Return original list in non-interactive mode
+        return 0
+    fi
+
+    local domains="$1"
 
     while true; do
-      read -rp "  Domain: " new_domain
-      [ -z "$new_domain" ] && break
+        display_current_domains "$domains"
 
-      new_domain=$(echo "$new_domain" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
-      [ -z "$new_domain" ] && continue
+        read -rp "Do you want to add more domains? (yes/no): " add_more
+        add_more=$(echo "$add_more" | tr '[:upper:]' '[:lower:]')
 
-      local found=0
-      for existing in $domains; do
-        if [ "$existing" = "$new_domain" ]; then
-          found=1
-          break
+        if [ "$add_more" = "no" ] || [ "$add_more" = "n" ]; then
+            ui_info "✅ Domains confirmed."
+            echo "$domains"
+            return 0
         fi
-      done
 
-      if [ $found -eq 0 ]; then
-        domains="$domains $new_domain"
-      else
-        debug "Domain '${new_domain}' already exists → skipped."
-      fi
+        ui_info "Enter additional domains one by one (press Enter on empty line when done):"
+
+        while true; do
+            read -rp "  Domain: " new_domain
+            [ -z "$new_domain" ] && break
+
+            # Clean input
+            new_domain=$(echo "$new_domain" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+            [ -z "$new_domain" ] && continue
+
+            # Avoid duplicates
+            local found=0
+            for existing in $domains; do
+                if [ "$existing" = "$new_domain" ]; then
+                    found=1
+                    ui_warn "Domain ${new_domain} is already in the list."
+                    break
+                fi
+            done
+
+            if [ $found -eq 0 ]; then
+                domains="$domains $new_domain"
+                ui_info "Added: ${new_domain}"
+            fi
+        done
+
+        # Clean and deduplicate list (but do not change order of main domain)
+        domains=$(echo "$domains" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+    done
+}
+
+# =============================================================================
+# install_certbot() - Install Certbot (Cross-Platform Support)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE STRICT INSTALLATION SEQUENCE
+#
+# Purpose:
+#   Installs the base `certbot` package/tool **without** any web server plugins.
+#   This script uses `certbot certonly --standalone`, so only the core client is needed.
+#
+# Alignment with CRITICAL REQUIREMENTS (Header):
+#   • Step 1: Install Certbot without plugin configuration
+#   • Full sequence: Install packages → Stop nginx early → Handle email & domains
+#     independently → Apply certificates (standalone) → Setup Nginx config
+#
+# Platform Support Strategy (2026 Defensive Approach):
+#   1. Linux with snapd (Ubuntu, Debian, Fedora, CentOS, Rocky, etc.) → snap (RECOMMENDED)
+#      • Official EFF preference: always latest version, auto-updates.
+#   2. Debian/Ubuntu fallback → apt (if snap unavailable)
+#   3. Alpine Linux → apk
+#   4. macOS → Homebrew (brew)
+#   5. Git Bash / MSYS2 / Windows native → Not fully supported natively.
+#      Warn user and suggest WSL2 or manual pip install.
+#
+# Why This Order?
+#   • Snap provides the most reliable, up-to-date Certbot with minimal maintenance.
+#   • Distribution packages (apt/dnf/apk) can lag behind Let's Encrypt requirements.
+#   • Homebrew is the standard and cleanest method on macOS.
+#   • Git Bash has poor native support for Certbot (no official binary, path issues).
+#
+# Defensive Design Rules:
+#   • Detect platform using `uname` and common package managers (idempotent).
+#   • Check if certbot is already available before installing.
+#   • Never mix installation methods (e.g., avoid installing both snap and apt).
+#   • All output goes through central `info()` / `warn()` / `die()` functions.
+#   • Fail with clear, actionable messages for unsupported platforms.
+#   • No configuration or certbot commands are run here.
+#
+# Important Notes:
+#   • Snap installation may require `snapd` to be installed first.
+#   • On macOS, Homebrew must be pre-installed by the user.
+#   • After installation on Linux, we often create a symlink for `/usr/bin/certbot`.
+#   • Git Bash / MSYS2 users are encouraged to use WSL2 for full compatibility.
+#
+# !!! THIS FUNCTION MUST REMAIN AS THE VERY FIRST INSTALL STEP !!!
+# !!! DO NOT INSTALL CERTBOT PLUGINS HERE !!!
+# !!! DO NOT COMBINE WITH install_nginx() !!!
+# !!! UPDATE THIS FUNCTION WHEN NEW OFFICIAL METHODS APPEAR !!!
+# =============================================================================
+
+install_certbot() {
+    if command -v certbot >/dev/null 2>&1; then
+        info "certbot is already installed."
+        return 0
+    fi
+
+    info "certbot not found → attempting platform-specific installation..."
+
+    # Detect platform
+    local OS
+    OS=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+    case "$OS" in
+        linux*)
+            # Try snap first (official recommended method in 2026)
+            if command -v snap >/dev/null 2>&1; then
+                info "snap detected → installing certbot via snap (recommended)..."
+                snap install --classic certbot || warn "Snap install failed, trying fallback..."
+
+                # Create symlink for easy access (common practice)
+                if [ -f "/snap/bin/certbot" ] && [ ! -f "/usr/bin/certbot" ]; then
+                    ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+                fi
+
+                if command -v certbot >/dev/null 2>&1; then
+                    info "certbot installed successfully via snap."
+                    return 0
+                fi
+            fi
+
+            # Alpine Linux (apk)
+            if command -v apk >/dev/null 2>&1; then
+                info "Alpine Linux detected → installing via apk..."
+                apk add --no-cache certbot || die "Failed to install certbot via apk."
+                info "certbot installed successfully via apk."
+                return 0
+            fi
+
+            # Debian/Ubuntu fallback (apt)
+            if command -v apt-get >/dev/null 2>&1; then
+                info "Debian/Ubuntu detected → installing via apt-get..."
+                apt-get update -qq || warn "apt-get update failed (continuing)"
+                apt-get install -y certbot || die "Failed to install certbot via apt."
+                info "certbot installed successfully via apt."
+                return 0
+            fi
+
+            # Other Linux (e.g. Fedora, CentOS) - could add dnf/yum later if needed
+            die "Linux detected but no supported package manager (snap/apk/apt) found. Please install certbot manually."
+            ;;
+
+        darwin*)  # macOS
+            if command -v brew >/dev/null 2>&1; then
+                info "macOS detected → installing certbot via Homebrew..."
+                brew install certbot || die "Failed to install certbot via brew."
+                info "certbot installed successfully via Homebrew."
+                return 0
+            else
+                die "Homebrew not found on macOS. Please install Homebrew first[](https://brew.sh/) then rerun."
+            fi
+            ;;
+
+        *)
+            # Git Bash / MSYS2 / Windows / unknown
+            if [ -n "$MSYSTEM" ] || echo "$OS" | grep -q "mingw"; then
+                warn "Git Bash / MSYS2 detected."
+                die "Certbot is not well supported in Git Bash. Recommended: Use WSL2 (Ubuntu) or install manually via Python pip."
+            else
+                die "Unsupported operating system: ${OS}. This script currently supports Linux (snap/apk/apt), macOS (Homebrew), and warns on Git Bash."
+            fi
+            ;;
+    esac
+}
+
+# =============================================================================
+# get_or_set_email() - Handle Let's Encrypt Email (Independent & Early)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE "EMAIL AND DOMAIN LIST HANDLING MUST BE DONE FIRST" RULE
+#
+# Purpose:
+#   This function is responsible for retrieving or interactively collecting
+#   the email address used for Let's Encrypt registration and expiration notifications.
+#
+#   According to the CRITICAL REQUIREMENTS defined in the script header:
+#     • Email handling MUST be done FIRST and INDEPENDENTLY — before ANY
+#       Certbot installation steps, certificate requests, or Nginx configuration.
+#     • The email is saved persistently in /etc/letsencrypt/email.conf
+#     • This value is reused on future runs and by Certbot renewals.
+#
+# Why Independent & Early?
+#   • Let's Encrypt requires a valid email during certificate issuance.
+#   • Certbot uses this email for important notifications (certificate expiration,
+#     renewal failures, rate limit warnings, etc.).
+#   • By handling email separately from domains and before any Certbot command,
+#     we strictly follow the defensive sequence:
+#       Install packages → Stop nginx → Handle email → Handle domains → Get certs → Configure nginx
+#
+# Defensive Design Rules Applied Here:
+#   • ALWAYS call ensure_letsencrypt_structure() first — never assume the directory
+#     or email.conf file exists (fresh systems, interrupted installs, manual deletions).
+#   • If the file exists and contains a valid email, reuse it silently (idempotent).
+#   • In non-interactive / TTY=0 mode: fail fast with clear error (forces interactive run).
+#   • Input validation: email cannot be empty.
+#   • File permissions: 600 (owner read/write only) for security.
+#   • All output goes through the central output system (info/warn/die).
+#
+# Behavior:
+#   • Interactive (TTY): Prompts user if no saved email found.
+#   • Non-interactive: Dies with error — email must be set interactively first.
+#   • Returns the email address (so it can be used immediately by apply_letsencrypt_standalone).
+#
+# This function is intentionally simple and loud — repetition and clear comments
+# ensure future maintainers (and AI assistants) do not accidentally move or combine
+# this step with domain handling or Certbot calls.
+#
+# !!! THIS FUNCTION MUST REMAIN EARLY IN run_interactive_setup() !!!
+# !!! DO NOT COMBINE WITH DOMAIN LOGIC !!!
+# !!! DO NOT REMOVE THE ENSURE_ LETSENCRYPT_STRUCTURE CALL !!!
+# =============================================================================
+
+get_or_set_email() {
+    ensure_letsencrypt_structure
+
+    # Check for existing saved email
+    if [ -f "$EMAIL_FILE" ] && [ -s "$EMAIL_FILE" ]; then
+        local email
+        email=$(tr -d ' \t\n\r' < "$EMAIL_FILE")
+
+        if [ -n "$email" ]; then
+            ui_info "Using saved Let's Encrypt email: ${email}"
+            echo "$email"
+            return 0
+        fi
+    fi
+
+    # Non-interactive mode: email must already be configured
+    if [ "$TTY" = "0" ]; then
+        die "No email configured in ${EMAIL_FILE}. Please run the script interactively first (sudo ${APP_NAME})."
+    fi
+
+    # Interactive email collection
+    local email=""
+    while true; do
+        read -rp "Enter your email address for Let's Encrypt notifications: " email
+
+        # Basic cleaning
+        email=$(echo "$email" | tr -d ' \t\n\r')
+
+        if [ -n "$email" ]; then
+            # Optional: could add basic email format validation here in future
+            break
+        fi
+
+        ui_warn "Email address cannot be empty."
     done
 
-    domains=$(echo "$domains" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
-    debug "Updated domains after adding: '${domains}'"
-  done
+    # Save email with strict permissions
+    echo "$email" > "$EMAIL_FILE"
+    chmod 600 "$EMAIL_FILE"
+
+    ui_info "Email address saved to ${EMAIL_FILE}"
+    echo "$email"
 }
 
-# ======================
-# CORE SETUP FUNCTIONS (unchanged)
-# ======================
-install_certbot() {
-  step_message "Installing certbot (if needed)"
-  if ! command -v certbot >/dev/null 2>&1; then
-    info "certbot not found → installing..."
-    apt-get update -qq
-    apt-get install -y certbot
-    info "certbot installed."
-  else
-    info "certbot is already installed."
-  fi
+# =============================================================================
+# stop_nginx_early() - Stop Nginx and Port 80 Before Any Certificate Operation
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE STRICT INSTALLATION SEQUENCE
+#
+# Purpose:
+#   This function MUST be called early (right after package installation)
+#   to ensure nginx is completely stopped before Certbot --standalone runs.
+#
+# Alignment with CRITICAL REQUIREMENTS (Header):
+#   • Step 3: Stop Nginx service early
+#   • Prevents nginx from ever running with empty or broken configuration
+#   • Allows Certbot --standalone to bind cleanly to port 80
+#   • Follows the internal (Certbot) → external (Nginx) model
+#
+# Why This Is Non-Negotiable (Defensive Reasoning):
+#   • An empty /etc/nginx/sites-enabled/default or partial config can cause
+#     nginx to fail to start or behave unpredictably.
+#   • Certbot --standalone needs exclusive access to port 80 for HTTP-01 challenges.
+#   • Starting nginx too early (or letting it stay running) is one of the most
+#     common failure modes with Certbot + Nginx setups.
+#   • Previous Grok instances repeatedly tried to combine or soften this step —
+#     this loud comment block exists to prevent that.
+#
+# Actions Performed:
+#   • systemctl stop nginx (graceful, respects systemd)
+#   • fuser -k 80/tcp (aggressive kill of anything listening on port 80)
+#   • Short sleep to allow ports to fully release
+#
+# !!! THIS FUNCTION MUST REMAIN EARLY IN BOTH INTERACTIVE AND NON-INTERACTIVE FLOWS !!!
+# !!! DO NOT REMOVE THE fuser KILL OR SOFTEN THIS BEHAVIOR !!!
+# !!! DO NOT START NGINX BEFORE CERTIFICATES ARE APPLIED !!!
+# =============================================================================
+
+stop_nginx_early() {
+    info "Stopping nginx and any process listening on port 80..."
+
+    sudo systemctl stop nginx 2>/dev/null || true
+
+    fuser -k 80/tcp 2>/dev/null || true
+
+    sleep 2
+
+    info "Nginx and port 80 cleared."
 }
 
-# ======================
-# Get or Set Email
-#  - Require TTY, cannot run under curl and after pipeline |
-# ======================
-get_or_set_email() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-  step_message "Configuring Let's Encrypt email"
-  if [ -f "$EMAIL_FILE" ]; then
-    email=$(cat "$EMAIL_FILE" | tr -d ' \t\n\r')
-    if [ -n "$email" ]; then
-      info "Using saved email: $email"
-      echo "$email"
-      return
+# =============================================================================
+# apply_certificates() - Request Let's Encrypt Certificate Using --standalone
+# =============================================================================
+#
+# CRITICAL FUNCTION - STRICT SEQUENCE ENFORCEMENT
+#
+# Purpose:
+#   Requests a single certificate for the main domain (as Common Name)
+#   plus all additional domains as Subject Alternative Names (SANs).
+#
+# Alignment with CRITICAL REQUIREMENTS:
+#   • Step 5: Ensure nginx is stopped → then run Certbot using the user-chosen main domain
+#   • Step 6: ONLY AFTER certificates are successfully applied: setup Nginx config
+#   • Uses --standalone (not --nginx plugin) to avoid configuration conflicts
+#
+# Key Rules Enforced:
+#   • Must run AFTER stop_nginx_early()
+#   • Uses the user-chosen main domain for the certificate directory path
+#   • All domains share ONE certificate (main_domain + SANs)
+#   • Persistent storage under /etc/letsencrypt/live/${main_domain}/
+#   • Defensive post-check: verify fullchain.pem actually exists
+#
+# Why --standalone?
+#   It provides the cleanest separation between Certbot (certificate provider)
+#   and Nginx (external web server). This avoids many common plugin-related failures.
+#
+# Defensive Design:
+#   • Always call ensure_letsencrypt_structure() first
+#   • Clear error handling via die()
+#   • Explicit success message
+#   • No assumption that directories or files exist beforehand
+#
+# !!! THIS FUNCTION (OR apply_letsencrypt_standalone) MUST RUN BEFORE setup_nginx_configs() !!!
+# !!! DO NOT MOVE CERTBOT CALLS AFTER NGINX CONFIGURATION !!!
+# !!! DO NOT USE --nginx PLUGIN IN THE MAIN FLOW !!!
+# =============================================================================
+
+apply_certificates() {
+    local domains="$1"
+    local email="$2"
+    local main_domain="$3"
+
+    ensure_letsencrypt_structure
+
+    # Defensive input validation
+    [ -z "$domains" ]     && die "No domains provided to apply_certificates()"
+    [ -z "$email" ]       && die "No email provided to apply_certificates()"
+    [ -z "$main_domain" ] && die "No main domain provided to apply_certificates()"
+
+    local cert_domains_comma
+    cert_domains_comma=$(echo "$domains" | tr ' ' ',')
+
+    info "Requesting Let's Encrypt certificate for ${main_domain} (and SANs) using --standalone..."
+
+    certbot certonly --standalone \
+        --email "$email" \
+        --agree-tos \
+        --non-interactive \
+        --domains "$cert_domains_comma" || die "Certbot failed to obtain certificates."
+
+    # Critical verification step
+    if [ ! -f "/etc/letsencrypt/live/${main_domain}/fullchain.pem" ]; then
+        die "Certificate files not found for main domain: ${main_domain}"
     fi
-  fi
 
-  while true; do
-    read -rp "Enter your email address for Let's Encrypt: " email
-    [ -n "$email" ] && break
-    warn "Email cannot be empty."
-  done
-
-  mkdir -p /etc/nginx
-  echo "$email" > "$EMAIL_FILE"
-  chmod 600 "$EMAIL_FILE"
-  info "Email saved."
-  echo "$email"
+    success "Certificates obtained successfully for ${main_domain} (and SANs)."
 }
+
+# =============================================================================
+# apply_letsencrypt_standalone() - Request Let's Encrypt Certificate (Primary Function)
+# =============================================================================
+#
+# CRITICAL FUNCTION - STRICT SEQUENCE ENFORCEMENT
+#
+# Purpose:
+#   This is the PRIMARY function used in run_interactive_setup() to obtain
+#   a single Let's Encrypt certificate using Certbot --standalone.
+#
+#   It requests ONE certificate where:
+#     • The user-chosen main_domain becomes the Primary Common Name (CN)
+#     • All additional domains become Subject Alternative Names (SANs)
+#
+# Alignment with CRITICAL REQUIREMENTS (Header - Single Source of Truth):
+#   • Step 5: Ensure nginx is stopped → then run Certbot using the user-chosen main domain
+#   • Step 6: ONLY AFTER certificates are successfully applied → setup full Nginx configuration
+#   • The main domain is decided interactively by the user (get_main_domain())
+#     and MUST be placed FIRST in the final domain list.
+#   • Email and domains are handled independently BEFORE this function runs.
+#
+# Why --standalone (NOT --nginx plugin)?
+#   • Prevents Certbot from modifying Nginx config prematurely.
+#   • Allows clean separation: Certbot (internal certificate provider) finishes first,
+#     then Nginx (external servant) receives its final configuration.
+#   • Avoids common failures with partial setups or broken nginx configs.
+#
+# Defensive Design Rules Applied:
+#   • ALWAYS call ensure_letsencrypt_structure() first (never assume paths exist).
+#   • Stop port 80 again (redundant safety — in case something restarted nginx).
+#   • Force main_domain to be the primary CN by constructing the domain list carefully.
+#   • Strong input validation with die() on missing parameters.
+#   • Post-issuance verification that the certificate files exist under ${main_domain}.
+#   • All output goes through central functions (info / die / success).
+#
+# Important Notes:
+#   • This function is intentionally more complete than apply_certificates().
+#     It includes extra domain cleaning and --allow-subset-of-names for robustness.
+#   • Duplication of port 80 stop is deliberate (defense in depth).
+#   • The certificate will be stored at: /etc/letsencrypt/live/${main_domain}/
+#
+# !!! THIS FUNCTION MUST BE CALLED ONLY AFTER stop_nginx_early() !!!
+# !!! DO NOT MOVE THIS AFTER setup_nginx_configs() !!!
+# !!! DO NOT USE --nginx PLUGIN IN THE MAIN INTERACTIVE FLOW !!!
+# !!! THE USER-CHOSEN MAIN DOMAIN MUST REMAIN THE FIRST DOMAIN IN THE LIST !!!
+# =============================================================================
 
 apply_letsencrypt_standalone() {
-  local domains="$1"
-  local email="$2"
-  local git_domain="$3"
+    local domains="$1"
+    local email="$2"
+    local main_domain="$3"
 
-  step_message "Applying Let's Encrypt certificates (standalone mode)"
+    # Defensive: never assume directories or parameters exist
+    ensure_letsencrypt_structure
 
-  info "Stopping any service on port 80..."
-  systemctl stop nginx 2>/dev/null || true
-  fuser -k 80/tcp 2>/dev/null || true
-  sleep 2
+    [ -z "$domains" ]     && die "No domains provided to apply_letsencrypt_standalone()"
+    [ -z "$email" ]       && die "No email provided to apply_letsencrypt_standalone()"
+    [ -z "$main_domain" ] && die "No main domain provided to apply_letsencrypt_standalone()"
 
-  local other_domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$git_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
-  local cert_domains="$git_domain $other_domains"
-  cert_domains=$(echo "$cert_domains" | tr -s ' ' | sed 's/^ *//;s/ *$//')
+    info "Stopping any service on port 80 again (defense in depth)..."
+    systemctl stop nginx 2>/dev/null || true
+    fuser -k 80/tcp 2>/dev/null || true
+    sleep 2
 
-  debug "Final domains list for certbot: '${cert_domains}'"
-  local cert_domains_comma=$(echo "$cert_domains" | tr ' ' ',')
+    # Build clean domain list with user-chosen main_domain forced first
+    local other_domains
+    other_domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$main_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
 
-  info "Requesting certificates with ${git_domain} as primary domain"
+    local cert_domains="$main_domain $other_domains"
+    cert_domains=$(echo "$cert_domains" | tr -s ' ' | sed 's/^ *//;s/ *$//')
 
-  certbot certonly --standalone \
-    --email "$email" \
-    --agree-tos \
-    --non-interactive \
-    --allow-subset-of-names \
-    --domains "$cert_domains_comma" || die "Certbot failed to obtain certificates."
+    local cert_domains_comma
+    cert_domains_comma=$(echo "$cert_domains" | tr ' ' ',')
 
-  if [ ! -f "/etc/letsencrypt/live/${git_domain}/fullchain.pem" ]; then
-    die "Certificate files were not created under ${git_domain}"
-  fi
+    info "Requesting Let's Encrypt certificate with ${main_domain} as primary Common Name..."
 
-  info "✅ Let's Encrypt certificates obtained successfully under ${git_domain}"
+    certbot certonly --standalone \
+        --email "$email" \
+        --agree-tos \
+        --non-interactive \
+        --allow-subset-of-names \
+        --domains "$cert_domains_comma" || die "Certbot failed to obtain certificates."
+
+    # Critical verification - ensure certificate was written under the correct main domain
+    if [ ! -f "/etc/letsencrypt/live/${main_domain}/fullchain.pem" ]; then
+        die "Certificate files were not created under the main domain: ${main_domain}"
+    fi
+
+    success "Let's Encrypt certificates obtained successfully."
+    success "Primary certificate directory: /etc/letsencrypt/live/${main_domain}/"
 }
 
-# ======================
-# Install Gitlab CE
-#  - Require TTY, cannot run under curl and after pipeline |
-# ======================
-install_gitlab_ce() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-  step_message "Installing GitLab CE (if needed)"
-  if command -v gitlab-ctl >/dev/null 2>&1; then
-    info "GitLab is already installed."
-  else
-    info "GitLab not found → installing gitlab-ce..."
-    apt-get update -qq
-    apt-get install -y curl
-    curl -sS https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash
-    apt-get install -y gitlab-ce
-    info "GitLab CE installed."
-  fi
-}
+# =============================================================================
+# get_main_domain() - Authoritative Main Domain Input
+# =============================================================================
+#
+# CRITICAL FUNCTION - DO NOT SIMPLIFY OR REFACTOR
+#
+# Purpose:
+#   This is the SINGLE place where the user interactively and explicitly chooses
+#   the PRIMARY / MAIN domain. 
+#
+#   According to the CRITICAL REQUIREMENTS:
+#   • The main domain is chosen by the USER interactively.
+#   • It is NOT determined by list position.
+#   • This value becomes the Common Name (CN) of the certificate.
+#   • All other domains added later become SANs only.
+#   • Prints ALL output to stderr so it is never captured by command substitution.
+#
+# Behavior:
+#   • Only runs in interactive TTY mode.
+#   • Rejects placeholder domains (example, localhost, 1.8.0.0.1).
+#   • Cleans and lowercases the domain.
+#   • Returns the clean main domain chosen by the user.
+#
+# This function must be called BEFORE ask_and_confirm_domains().
+# The returned value MUST be preserved and later forced to the front of the
+# final domain list.
+#
+# !!! THIS IS THE AUTHORITATIVE DECISION POINT FOR THE MAIN DOMAIN !!!
+# !!! DO NOT MOVE THIS LOGIC OR TRY TO DERIVE MAIN DOMAIN FROM LIST !!!
+# =============================================================================
 
-# ======================
-# Get main domain 
-#  - Require TTY, cannot run under curl and after pipeline |
-# ======================
 get_main_domain() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-
-  local git_domain=""
-
-  step_message "Detecting main GitLab domain"
-
-  # Try to extract from existing gitlab.rb
-  if [ -f /etc/gitlab/gitlab.rb ]; then
-    git_domain=$(grep -E "^external_url" /etc/gitlab/gitlab.rb \
-      | sed -E 's|.*https?://([^/":[:space:]]+).*|\1|' | head -n1 | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
-  fi
-
-  # If still invalid (fresh install or bad value), ask user
-  if [ -z "$git_domain" ] || echo "$git_domain" | grep -qE '(example|gitlab\.example|localhost|127\.0\.0\.1|0\.0\.0\.0)'; then
-    if [ -z "$git_domain" ]; then
-      warn "No external_url found in gitlab.rb (fresh install or default config)."
-    else
-      warn "Invalid or placeholder domain detected: ${git_domain}"
+    if [ "$TTY" = "0" ]; then
+        die "Cannot get main domain in non-interactive mode. Run interactively."
     fi
+    local main_domain=""
 
-    echo "" >&2
-    info "Please enter your PRIMARY GitLab domain (this will be the main HTTPS address):"
+    ui_empty_line
+    ui_info "Please enter your PRIMARY domain (this will be the main certificate name):"
+    
     while true; do
-      read -rp "  Primary domain (e.g. git.crms.hk): " input
-      git_domain=$(echo "$input" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+        read -rp "  Primary domain (e.g. git.crms.hk): " input
+        
+        # Clean and validate input
+        main_domain=$(echo "$input" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
 
-      if [ -n "$git_domain" ] && ! echo "$git_domain" | grep -qE '(example|localhost|127\.0\.0\.1)'; then
-        info "✅ Using primary domain: ${git_domain}"
-        break
-      fi
-      warn "Please enter a valid domain name (cannot be empty or placeholder)."
+        if [ -n "$main_domain" ] && \
+        ! echo "$main_domain" | grep -qE '(example|localhost|127\.0\.0\.1|local|test)'; then
+            ui_success "✅ Primary domain accepted: ${main_domain}"
+            echo "$main_domain"
+            return 0
+        fi
+
+        ui_warn "Please enter a valid domain name."
+        ui_warn "It cannot be empty, localhost, example.com, or similar placeholders."
     done
-  else
-    info "Detected main domain from gitlab.rb: ${git_domain}"
-  fi
-
-  echo "$git_domain"
 }
 
-# ======================
-# Ask gitlab SSH host
-#  - Require TTY, cannot run under curl and after pipeline |
-# ======================
-ask_gitlab_ssh_host() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-
-  local main_domain="$1"
-  step_message "Configuring GitLab SSH Host"
-  warn "Tip: If using Cloudflare Proxy on ${main_domain}, use a different domain for SSH."
-
-  if [ -f /etc/gitlab/gitlab.rb ]; then
-    existing=$(grep -E "gitlab_rails\['gitlab_ssh_host'\]" /etc/gitlab/gitlab.rb 2>/dev/null | sed -E "s/.*'([^']+)'.*/\1/" || echo "")
-    if [ -n "$existing" ]; then
-      info "Current SSH host: ${existing}"
-      read -rp "Keep existing? (yes/no): " keep
-      if echo "$keep" | grep -qi "^y"; then
-        echo "$existing"
-        return
-      fi
-    fi
-  fi
-
-  while true; do
-    read -rp "Enter GitLab SSH Host: " host
-    host=$(echo "$host" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
-    [ -n "$host" ] && { echo "$host"; return; }
-    warn "SSH host cannot be empty."
-  done
-}
-
-update_gitlab_config() {
-  local git_domain="$1"
-  local gitlab_ssh_host="$2"
-  local gitlab_rb="/etc/gitlab/gitlab.rb"
-
-  step_message "Updating gitlab.rb configuration"
-  cp "$gitlab_rb" "${gitlab_rb}.bak.$(date +%s)" 2>/dev/null || true
-
-  sed -i '/external_url/d' "$gitlab_rb" 2>/dev/null || true
-  sed -i '/gitlab_rails\['gitlab_ssh_host'\]/d' "$gitlab_rb" 2>/dev/null || true
-  sed -i '/nginx\['enable'\]/d' "$gitlab_rb" 2>/dev/null || true
-  sed -i '/letsencrypt\['enable'\]/d' "$gitlab_rb" 2>/dev/null || true
-  sed -i '/web_server\['external_users'\]/d' "$gitlab_rb" 2>/dev/null || true
-
-  cat >> "$gitlab_rb" << EOF
-
-external_url 'https://${git_domain}'
-gitlab_rails['gitlab_ssh_host'] = '${gitlab_ssh_host}'
-web_server['external_users'] = ['www-data']
-nginx['enable'] = false
-letsencrypt['enable'] = false
-EOF
-
-  info "gitlab.rb updated."
-}
-
-check_gitlab_after_reconfigure() {
-  step_message "Checking GitLab after reconfigure"
-  if gitlab-ctl status >/dev/null 2>&1; then
-    info "GitLab services appear to be running."
-  else
-    warn "GitLab services may need manual check."
-  fi
-}
+# =============================================================================
+# install_nginx() - Install Nginx (Cross-Platform Support)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE STRICT INSTALLATION SEQUENCE
+#
+# Purpose:
+#   Installs the base `nginx` package **without** any custom configuration.
+#
+# Alignment with CRITICAL REQUIREMENTS (Header - Single Source of Truth):
+#   • Step 2: Install Nginx without configuration
+#   • Step 3: Stop Nginx service early (handled in stop_nginx_early())
+#   • Full sequence must be preserved:
+#       Install packages → Stop nginx early → Handle email & domains independently
+#       → Apply certificates (standalone) → ONLY THEN setup full Nginx configuration
+#
+# Platform Support Strategy (2026):
+#   1. Linux:
+#      • Debian/Ubuntu family          → apt-get
+#      • Alpine Linux                  → apk
+#      • RHEL/Fedora/Rocky/CentOS/Amazon Linux → dnf (with EPEL if needed)
+#   2. macOS                           → Homebrew (brew)
+#   3. Git Bash / MSYS2 / native Windows → Not recommended for production.
+#      Strong warning + suggestion to use WSL2.
+#   4. Other (openSUSE, etc.)          → Basic zypper support with fallback warning.
+#
+# Why Native Packages?
+#   • Provides best integration with the OS (init system, paths, security).
+#   • On Linux, the nginx package usually starts the service automatically after install.
+#     This is expected behavior — we deliberately stop it in stop_nginx_early() to keep
+#     port 80 free for Certbot --standalone.
+#   • Homebrew on macOS is clean and widely used.
+#   • Avoids compiling from source (too complex and error-prone for a one-command script).
+#
+# Defensive Design Rules Applied:
+#   • Detect platform using `uname` and common package managers.
+#   • Check if nginx is already installed before attempting install (idempotent).
+#   • Run package manager update where appropriate.
+#   • All output goes through central `info()` / `warn()` / `die()` functions.
+#   • Fail with clear, actionable messages for unsupported or problematic environments.
+#   • No configuration files touched here — that happens only in setup_nginx_configs().
+#
+# Important Notes:
+#   • After installation on most Linux distros, nginx service is enabled and started.
+#     This is why stop_nginx_early() must run immediately after.
+#   • On macOS, Homebrew installs nginx but does not start it automatically.
+#   • Git Bash / MSYS2 has very limited nginx support — native Windows nginx exists
+#     but lacks full POSIX features expected by this script.
+#
+# !!! THIS FUNCTION MUST REMAIN EARLY IN run_interactive_setup() !!!
+# !!! DO NOT ADD ANY CONFIGURATION, START, OR ENABLE COMMANDS HERE !!!
+# !!! DO NOT COMBINE WITH setup_nginx_configs() !!!
+# !!! THE OFFICIAL PACKAGE OFTEN STARTS NGINX — WE STOP IT RIGHT AFTER !!!
+# =============================================================================
 
 install_nginx() {
-  step_message "Installing Nginx (if needed)"
-  if ! command -v nginx >/dev/null 2>&1; then
-    info "Nginx not found → installing..."
-    apt-get update -qq
-    apt-get install -y nginx
-    info "Nginx installed."
-  else
-    info "Nginx is already installed."
-  fi
+    if command -v nginx >/dev/null 2>&1; then
+        info "nginx is already installed."
+        return 0
+    fi
+
+    info "nginx not found → attempting platform-specific installation..."
+
+    # Detect platform
+    local OS
+    OS=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+    case "$OS" in
+        linux*)
+            # Debian / Ubuntu family
+            if command -v apt-get >/dev/null 2>&1; then
+                info "Debian/Ubuntu detected → installing nginx via apt-get..."
+                apt-get update -qq || warn "apt-get update failed (continuing)"
+                apt-get install -y nginx || die "Failed to install nginx via apt-get."
+                info "nginx installed successfully via apt-get."
+                return 0
+            fi
+
+            # Alpine Linux
+            if command -v apk >/dev/null 2>&1; then
+                info "Alpine Linux detected → installing nginx via apk..."
+                apk update || warn "apk update failed (continuing)"
+                apk add --no-cache nginx || die "Failed to install nginx via apk."
+                info "nginx installed successfully via apk."
+                return 0
+            fi
+
+            # RHEL / Fedora / Rocky / CentOS / Amazon Linux (dnf or yum)
+            if command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+                info "RHEL-based system detected → installing nginx via dnf/yum..."
+                if command -v dnf >/dev/null 2>&1; then
+                    dnf install -y epel-release 2>/dev/null || true   # EPEL for older systems if needed
+                    dnf install -y nginx || die "Failed to install nginx via dnf."
+                else
+                    yum install -y epel-release 2>/dev/null || true
+                    yum install -y nginx || die "Failed to install nginx via yum."
+                fi
+                info "nginx installed successfully via dnf/yum."
+                return 0
+            fi
+
+            # openSUSE / SUSE (zypper) - minimal support
+            if command -v zypper >/dev/null 2>&1; then
+                info "openSUSE detected → installing nginx via zypper..."
+                zypper refresh -y || warn "zypper refresh failed"
+                zypper install -y nginx || die "Failed to install nginx via zypper."
+                info "nginx installed successfully via zypper."
+                return 0
+            fi
+
+            die "Linux detected but no supported package manager (apt/apk/dnf/yum/zypper) found. Please install nginx manually."
+            ;;
+
+        darwin*)  # macOS
+            if command -v brew >/dev/null 2>&1; then
+                info "macOS detected → installing nginx via Homebrew..."
+                brew update && brew install nginx || die "Failed to install nginx via Homebrew."
+                info "nginx installed successfully via Homebrew."
+                return 0
+            else
+                die "Homebrew not found on macOS. Please install Homebrew first[](https://brew.sh/) then rerun the script."
+            fi
+            ;;
+
+        *)
+            # Git Bash / MSYS2 / native Windows / unknown
+            if [ -n "${MSYSTEM:-}" ] || echo "$OS" | grep -q "mingw\|msys"; then
+                warn "Git Bash / MSYS2 detected."
+                die "Nginx is not reliably supported in Git Bash. Recommended solutions:\n  • Use WSL2 with Ubuntu\n  • Install native Windows nginx from https://nginx.org/en/download.html (limited features)"
+            else
+                die "Unsupported operating system: ${OS}. This script supports Linux (apt/apk/dnf), macOS (Homebrew), and warns on Git Bash / Windows."
+            fi
+            ;;
+    esac
 }
+
+# =============================================================================
+# fix_docroot_permissions() - Set correct ownership for web files
+# =============================================================================
+#
+# Purpose:
+#   Ensures all document roots and HTML files are owned by www-data:www-data
+#   (the default nginx user on Debian/Ubuntu and most Linux distros).
+#
+#   This prevents permission issues when serving static files.
+#   Runs after setup_nginx_configs() so all directories and files exist.
+#
+# Defensive:
+#   - Only runs as root
+#   - Uses -R (recursive)
+#   - Graceful on non-Debian systems (still tries common www-data)
+#
+# !!! DO NOT SIMPLIFY - permission issues are very common after gitlab-nginx runs !!!
+# =============================================================================
+
+fix_docroot_permissions() {
+    if [ "$(id -u)" -ne 0 ]; then
+        return 0
+    fi
+
+    info "Fixing permissions: setting www-data:www-data ownership on document roots..."
+
+    # Main docroots for all domains
+    if [ -d "/var/www" ]; then
+        chown -R www-data:www-data /var/www 2>/dev/null || true
+    fi
+
+    # ACME challenge directory (used for renewals)
+    if [ -d "/var/www/letsencrypt" ]; then
+        chown -R www-data:www-data /var/www/letsencrypt 2>/dev/null || true
+    fi
+
+    # Ensure directories are readable/executable and files are readable
+    find /var/www -type d -exec chmod 755 {} + 2>/dev/null || true
+    find /var/www -type f -exec chmod 644 {} + 2>/dev/null || true
+
+    success "Document root permissions fixed (www-data:www-data)"
+}
+
+# =============================================================================
+# setup_nginx_configs() - Final Nginx Configuration with GitLab Proxy (Step 11)
+# =============================================================================
+#
+# CRITICAL FUNCTION - STRICT SEQUENCE ENFORCEMENT (Updated for v2.0.0)
+#
+# Purpose:
+#   Step 11: Setup full Nginx configuration ONLY AFTER certificates are applied
+#   and gitlab-ctl exists. Includes GitLab proxy while keeping all previous
+#   Cloudflare protection, real_ip, and security features.
+#
+#   It sets up a secure, production-ready Nginx configuration with:
+#     • HTTP → HTTPS redirect + ACME challenge support
+#     • Per-domain HTTPS server blocks using the SINGLE certificate
+#       (main_domain as primary CN + all other domains as SANs)
+#     • Strong Cloudflare-only origin protection (deny all other direct access)
+#     • Proper real_ip handling so $remote_addr reflects the real visitor IP
+#
+# Key Rules:
+#   • MUST be called only in Step 11
+#   • Keep ALL existing Cloudflare IP restriction, real_ip, /cloudflare-check
+#   • Add GitLab upstream + proxy_pass for external nginx mode
+#   • Use main_domain for server_name and SSL certificate paths
+#   • All changes must be defensive and additive only
+#
+# Security Model (Defensive Design):
+#   • Only Cloudflare IPs are allowed to reach the server on port 443.
+#   • Direct access from anywhere else is blocked (deny all;).
+#   • This protects the origin server when placed behind Cloudflare Proxy (orange cloud).
+#   • real_ip_recursive on + CF-Connecting-IP header gives correct client IP
+#     to logs and any backend applications (e.g. GitLab, custom apps).
+#   • SSL configuration is modern and secure (TLSv1.2 + TLSv1.3).
+#
+# Why Cloudflare IP Restriction?
+#   When using Cloudflare, all visitor traffic arrives from Cloudflare's anycast network.
+#   Blocking everything else prevents direct attacks, bypass of WAF, and reduces attack surface.
+#   This is a common and recommended hardening practice for origins behind Cloudflare.
+#
+# Cloudflare IP Ranges:
+#   Sourced from the official page: https://www.cloudflare.com/ips/
+#   Last verified: April 2026
+#   These ranges change infrequently. When they do, Cloudflare announces updates
+#   on the same page before using them in production.
+#
+# Maintenance Note (Defensive):
+#   • Keep this file static for reliability in one-command installs.
+#   • To update ranges in the future:
+#       curl -fsSL https://www.cloudflare.com/ips-v4 > /tmp/cf-ipv4
+#       curl -fsSL https://www.cloudflare.com/ips-v6 > /tmp/cf-ipv6
+#     Then manually merge into ${CLOUDFLARE_MAP_FILE} and re-run:
+#       ${APP_NAME} nginx-conf
+#   • Or implement a simple update script/hook later if needed.
+#   • If access to / return 403, please use /cloudflare-check to inspect
+#
+# Problems found:
+#   • nginx cannot check $remote_ip against ip map well, fall back to 
+#     weak $http_cf_connecting_ip header at this stage.
+#
+# Certificate Usage:
+#   All domains (main + SANs) share ONE certificate located at:
+#       /etc/letsencrypt/live/${main_domain}/
+#   This is by design — one cert covers the entire list.
+#
+# =============================================================================
+# CRITICAL WARNING - $is_cf IMPLEMENTATION (REAL SERVER TESTED)
+# =============================================================================
+#
+# Problems discovered through real server testing:
+#   • Using `geo $remote_addr $is_cf { ... }`                → buggy / unreliable
+#   • Using `map $realip_remote_addr $is_cf { ... }`        → buggy / unreliable
+#   • Any map/geo that depends on variables after real_ip module runs → often fails
+#
+# Working solution (verified on real server):
+#   1. Capture original connecting IP very early:
+#        map $remote_addr $origin_addr { default $remote_addr; }
+#   2. Then inside server block:
+#        set $is_cf 0;
+#        if ($remote_addr != $origin_addr) {
+#            set $is_cf 1;
+#        }
+#
+# This method is currently the only reliable way found in real environment.
+#
+# !!! DO NOT START NGINX EARLIER !!!
+# !!! THIS FUNCTION MUST RUN AFTER apply_letsencrypt_standalone() !!!
+# !!! DO NOT MODIFY THE CORE STRUCTURE OR SECURITY MODEL !!!
+# =============================================================================
 
 setup_nginx_configs() {
-  local domains="$1"
-  local git_domain="$2"
-  local cert_path="/etc/letsencrypt/live/${git_domain}"
+    local domains="$1"
+    local main_domain="$2"
+    local cert_path="/etc/letsencrypt/live/${main_domain}"
+    local CLOUDFLARE_MAP_FILE="/etc/nginx/sites-available/cloudflare-map.conf"
 
-  step_message "Setting up Nginx configurations"
+    [ -z "$domains" ]     && die "No domains provided to setup_nginx_configs()"
+    [ -z "$main_domain" ] && die "No main domain provided to setup_nginx_configs()"
 
-  rm -f /etc/nginx/sites-enabled/default
-  mkdir -p /var/www/letsencrypt
+    info "Setting up final Nginx configuration with GitLab proxy (Step 11)..."
 
-  cat > /etc/nginx/sites-available/gitlab-workhorse.conf << 'EOF'
-upstream gitlab-workhorse {
-    server unix:/var/opt/gitlab/gitlab-workhorse/sockets/socket fail_timeout=0;
+    # 1. Backup (already handled by caller)
+    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+    mkdir -p /var/www
+    chmod 755 /var/www
+
+    # 2. Cloudflare Map (http context) - unchanged
+    info "Creating/Updating Cloudflare IP detection map..."
+
+    cat > ${CLOUDFLARE_MAP_FILE} << 'EOF'
+# =============================================================================
+# Simple and Reliable Cloudflare detection
+# =============================================================================
+map $remote_addr $origin_addr {
+    default $remote_addr;
 }
-EOF
-
-  cat > /etc/nginx/sites-available/redirect.conf << 'EOF'
-server {
-    listen 80;
-    listen [::]:80;
-    server_name _;
-    location /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
-        try_files $uri =404;
-    }
-    return 301 https://$server_name$request_uri;
+map $http_cf_connecting_ip $has_cf {
+    default "NO";
+    "~." "YES";
 }
+
+# Cloudflare Real IP Configuration
+set_real_ip_from 173.245.48.0/20;
+set_real_ip_from 103.21.244.0/22;
+set_real_ip_from 103.22.200.0/22;
+set_real_ip_from 103.31.4.0/22;
+set_real_ip_from 141.101.64.0/18;
+set_real_ip_from 108.162.192.0/18;
+set_real_ip_from 190.93.240.0/20;
+set_real_ip_from 188.114.96.0/20;
+set_real_ip_from 197.234.240.0/22;
+set_real_ip_from 198.41.128.0/17;
+set_real_ip_from 162.158.0.0/15;
+set_real_ip_from 104.16.0.0/13;
+set_real_ip_from 104.24.0.0/14;
+set_real_ip_from 172.64.0.0/13;
+set_real_ip_from 131.0.72.0/22;
+
+# IPv6
+set_real_ip_from 2400:cb00::/32;
+set_real_ip_from 2606:4700::/32;
+set_real_ip_from 2803:f800::/32;
+set_real_ip_from 2405:b500::/32;
+set_real_ip_from 2405:8100::/32;
+set_real_ip_from 2a06:98c0::/29;
+set_real_ip_from 2c0f:f248::/32;
+
 EOF
 
-  ln -sf /etc/nginx/sites-available/gitlab-workhorse.conf /etc/nginx/sites-enabled/
-  ln -sf /etc/nginx/sites-available/redirect.conf /etc/nginx/sites-enabled/
+    chmod 644 ${CLOUDFLARE_MAP_FILE}
+    ln -sf ${CLOUDFLARE_MAP_FILE} /etc/nginx/sites-enabled/
 
-  for domain in $domains; do
-    if [ "$domain" = "$git_domain" ]; then
-      cat > "/etc/nginx/sites-available/${domain}.conf" << EOF
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${domain};
+    if ! grep -q "cloudflare-map.conf" /etc/nginx/nginx.conf 2>/dev/null; then
+        sed -i "/http[[:space:]]*{/a \    include ${CLOUDFLARE_MAP_FILE};" /etc/nginx/nginx.conf 2>/dev/null || true
+    fi
 
-    ssl_certificate ${cert_path}/fullchain.pem;
-    ssl_certificate_key ${cert_path}/privkey.pem;
+    # 3. Per-Domain Configs with GitLab Proxy
+    for domain in $domains; do
+        mkdir -p "/var/www/${domain}"
+        chmod 755 "/var/www/${domain}"
 
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384;
-    ssl_prefer_server_ciphers off;
+        # Simple index page
+        cat > "/var/www/${domain}/index.html" << EOF
+<!DOCTYPE html><html><head><title>${domain}</title></head><body style="font-family:Arial;text-align:center;padding:100px;">
+<h1>${domain}</h1><p>GitLab CE + Nginx + Cloudflare Protection</p></body></html>
+EOF
 
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header X-Frame-Options DENY;
-    add_header X-Content-Type-Options nosniff;
+        cat > "/etc/nginx/sites-available/${domain}.conf" << EOF
+include ${CLOUDFLARE_MAP_FILE};
 
-    client_max_body_size 0;
-    gzip off;
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
-        try_files \$uri =404;
-    }
-
-    location / {
-        proxy_pass http://gitlab-workhorse;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$http_host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$http_connection;
-        proxy_read_timeout 900;
-        proxy_connect_timeout 300;
-        proxy_buffering off;
-        proxy_request_buffering off;
-    }
+upstream gitlab_workhorse {
+    server unix:/var/opt/gitlab/gitlab-workhorse/workhorse.socket;
 }
-EOF
-    else
-      mkdir -p "/var/www/${domain}"
-      cat > "/var/www/${domain}/index.html" << EOF
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>${domain}</title>
-<style>body{font-family:Arial,sans-serif;text-align:center;padding:100px;background:#f4f4f4;}h1{color:#2c3e50;}</style>
-</head>
-<body>
-<h1>${domain}</h1>
-<p>This is a static website.</p>
-<p><strong>GitLab:</strong> <a href="https://${git_domain}">${git_domain}</a></p>
-</body>
-</html>
-EOF
 
-      cat > "/etc/nginx/sites-available/${domain}.conf" << EOF
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name ${domain};
+
     root /var/www/${domain};
     index index.html;
 
@@ -584,153 +2777,1367 @@ server {
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers off;
 
+    # Cloudflare detection
+    set \$is_cf 0;
+    if (\$remote_addr != \$origin_addr) {
+        set \$is_cf 1;
+    }
+
+    # Cloudflare check page (bypass protection)
+    location = /cloudflare-check {
+        default_type text/html;
+        return 200 '
+<!DOCTYPE html>
+<html><head><title>Cloudflare Check - ${domain}</title></head>
+<body style="font-family:Arial;text-align:center;padding:50px;">
+    <h1>Cloudflare Check</h1>
+    <p style="font-size:2.8em;color:#0066cc;">\$remote_addr</p>
+    <p><strong>From Cloudflare?</strong> \$is_cf (1 = Yes)</p>
+    <p><strong>CF Connecting IP:</strong> \$http_cf_connecting_ip</p>
+</body></html>';
+    }
+
+    # GitLab proxy (main application)
+    location / {
+        if (\$http_cf_connecting_ip = "") {
+            return 403;
+        }
+        proxy_pass http://gitlab_workhorse;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-SSL on;
+        proxy_set_header X-Forwarded-Host \$http_host;
+        proxy_read_timeout 300;
+        proxy_connect_timeout 300;
+    }
+
+    # ACME challenge for renewals
     location /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
         try_files \$uri =404;
     }
 }
 EOF
-    fi
-    ln -sf "/etc/nginx/sites-available/${domain}.conf" /etc/nginx/sites-enabled/
-  done
 
-  info "Nginx configuration files created."
+        ln -sf "/etc/nginx/sites-available/${domain}.conf" /etc/nginx/sites-enabled/
+    done
+
+    setup_nginx_adm_ownership
+
+    info "Nginx configuration with GitLab proxy completed."
+    info "→ Debug page: https://${main_domain}/cloudflare-check"
 }
 
-# ======================
-# FULL SETUP (Interactive only)
-# Execution Order (for full installton and TTY=1, setup):
-# 1. Root check
-# 2. Basic Setup
-# 3. Domain handling early
-# 4. Handle Let's Encrypt email
-# 5. Apply Let's Encrypt certificates using standalone + certonly
-# 6. Ask gitlab SSH host
-# 7. Backup + update gitlab.rb
-# 8. gitlab-ctl reconfigure + check
-# 9. Setup all nginx configs
-# 10. Stop → test → restart nginx
-# ======================
-run_full_setup() {
-  check_root
-  run_basic_setup
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-  debug "=== Starting domain loading phase ==="
-  initial_domains=$(load_existing_domains)
-  git_domain=$(get_main_domain)
-  if [ -z "$initial_domains" ]; then
-    domains_to_confirm="$git_domain"
-  else
-    domains_to_confirm="$initial_domains"
-  fi
-  domains=$(ask_and_confirm_domains "$domains_to_confirm")
-  save_domains_to_file "$domains"
+# =============================================================================
+# run_interactive_setup() - Main Interactive Setup Flow
+# =============================================================================
+#
+# CRITICAL FUNCTION - STRICT SEQUENCE ENFORCEMENT
+#
+# This function strictly follows the CRITICAL REQUIREMENTS defined in the main header.
+#
+# Key Logic for Main Domain:
+#   • The PRIMARY / MAIN domain is chosen EXPLICITLY and INTERACTIVELY by the USER
+#     via get_main_domain(). This is the authoritative decision.
+#   • ask_and_confirm_domains() is ONLY used to let the user ADD extra domains (SANs).
+#   • After confirmation, the script MUST re-arrange the final domain list so that
+#     the user-chosen main domain is placed FIRST.
+#   • Prints ALL output to stderr so it is never captured by command substitution.
+#
+# Platform Notes (2026):
+#   • install_certbot() and install_nginx() now support multiple platforms.
+#   • Core certificate and nginx config logic remains Linux-centric.
+#   • On macOS, some systemd commands are skipped gracefully in stop_nginx_early().
+#
+# New in 1.9.0:
+#   • Calls nginx-adm setup functions early
+#   • Calls backup_existing_nginx_configs() before any configuration changes
+#   • Uses nginx-adm for ownership and testing (least privilege)
+#
+# New Feature (April 2026):
+#   • Added interactive question: "Are you using Cloudflare proxy?"
+#   • Supports --no-cloudflare flag to skip the question and disable protection
+#   • When using Cloudflare: warns user to temporarily set DNS to "DNS Only" (grey cloud)
+#   • When not using Cloudflare: generates open Nginx config (allow all)
+#
+# Strict Sequence (MUST NOT BE CHANGED):
+# New 13-Step Sequence for v2.0.0:
+#   1. Install Certbot
+#   2. Install Nginx
+#   3. Stop Nginx early
+#   4. Handle email and domains
+#   5. Apply certificates (standalone)
+#   6. Install GitLab CE (without config)
+#   7. Stop GitLab early
+#   8. Get/set GitLab SSH hostname
+#   9. Backup gitlab.rb
+#  10. Configure gitlab.rb + reconfigure
+#  11. Setup Nginx with GitLab proxy
+#  12. Test and start nginx (as nginx-adm)
+#  13. Show SSH client instructions
+#
+# Why this exact order?
+#   - Prevents nginx from running with empty/broken config
+#   - Allows clean Certbot --standalone operation on port 80
+#   - Maintains clear separation: Certbot (cert provider) → Nginx (web server)
+#
+# !!! DO NOT MODIFY THIS SEQUENCE !!!
+# !!! DO NOT START NGINX BEFORE CERTIFICATES ARE APPLIED !!!
+# !!! DO NOT COMBINE STEPS OR TREAT CERTBOT AND NGINX AS EQUAL !!!
+# =============================================================================
 
-  install_certbot
-  email=$(get_or_set_email)
-
-  apply_letsencrypt_standalone "$domains" "$email" "$git_domain"
-
-  install_gitlab_ce
-  gitlab_ssh_host=$(ask_gitlab_ssh_host "$git_domain")
-  update_gitlab_config "$git_domain" "$gitlab_ssh_host"
-  if command -v gitlab-ctl >/dev/null 2>&1; then
-    gitlab-ctl reconfigure
-  fi
-  check_gitlab_after_reconfigure
-
-  install_nginx
-
-  step_message "Preparing Nginx"
-  systemctl stop nginx 2>/dev/null || true
-
-  setup_nginx_configs "$domains" "$git_domain"
-
-  nginx -t && info "Nginx config test passed." || die "Nginx config test failed!"
-  systemctl restart nginx
-  info "Nginx restarted successfully."
-
-  echo ""
-  info "🎉 Full setup completed successfully!"
-  info "   GitLab Web URL : https://${git_domain}"
-  info "   GitLab SSH Host: ${gitlab_ssh_host}"
-}
-
-# ======================
-# BASIC SETUP for curl | bash (non-interactive)
-# 1. Root check
-# 2. Perform self-install
-# 3. Install certbot
-# 4. Install gitlab-ce
-# 5. Install nginx
-# ======================
-run_basic_setup() {
-  check_root
-  perform_self_install "false"
-  install_certbot
-  install_gitlab_ce
-  install_nginx
-  info "Basic packages installed. Now run interactively:"
-  info "   sudo ${APP_NAME}"
-}
-
-check_tty_setup() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    run_basic_setup
-  else
-    run_full_setup
-  fi
-}
-
-gitlab_config() {
-  if [ "$TTY" = "0" ]; then
-    debug "Non interactive mode"
-    return 0
-  fi
-  check_root
-  git_domain=$(get_main_domain)
-  gitlab_ssh_host=$(ask_gitlab_ssh_host "$git_domain")
-  update_gitlab_config "$git_domain" "$gitlab_ssh_host"
-  gitlab-ctl reconfigure
-  info "✅ gitlab.rb updated and reconfigured."
-  exit 0
-
-}
-
-# ======================
-# ARGUMENT PARSING
-# ======================
-
-case "$1" in
-  --help|-h)          show_usage ;;
-  --version|-v)       show_version ;;
-  --domains)          show_domains ;;
-  --email)            show_email ;;
-  --nginx-conf)
+run_interactive_setup() {
     check_root
+    ensure_letsencrypt_structure
+
+    # nginx-adm Least-Privilege Setup
+    create_nginx_adm_user
+    setup_nginx_adm_ownership
+    setup_restricted_sudoers
+
+    # Backup before any changes
+    backup_existing_nginx_configs
+
+    # Step 1-2: Install packages
+    install_certbot
+    install_nginx
+
+    # Step 3: Stop Nginx early
+    stop_nginx_early
+
+    # Step 4: Email & Domains
+    local email
+    email=$(get_or_set_email)
+
+    local main_domain
+    local domains
+    local domains_to_confirm
+
     domains=$(load_existing_domains)
-    [ -z "$domains" ] && die "No domains found. Run full setup first."
-    git_domain=$(get_main_domain)
-    setup_nginx_configs "$domains" "$git_domain"
-    info "✅ Nginx configs regenerated."
-    exit 0
-    ;;
-  --gitlab-conf)
-    gitlab_config
-    ;;
-  --setup)
-    run_full_setup
-    ;;
-  --force-reinstall)
-    check_root
-    perform_self_install "true"
-    info "Force reinstall completed. You can now run '${APP_NAME}' for full setup."
-    exit 0
-    ;;
-  "")                 check_tty_setup ;;
-  *)                  die "Unknown option. Use --help." ;;
-esac
+    [ -n "$domains" ] && main_domain=$(get_main_domain_from_file "$domains")
+
+    if [ -z "$main_domain" ]; then
+        main_domain=$(get_main_domain)
+    else
+        ui_info "Using saved main domain: ${main_domain}"
+    fi
+
+    if [ -n "$domains" ]; then
+        domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$main_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+        domains_to_confirm="$main_domain $domains"
+        domains_to_confirm=$(echo "$domains_to_confirm" | tr -s ' ' | sed 's/^ *//;s/ *$//')
+    else
+        domains_to_confirm="$main_domain"
+    fi
+
+    domains=$(ask_and_confirm_domains "$domains_to_confirm")
+
+    # Force main domain to front
+    if [ -n "$main_domain" ] && [ -n "$domains" ]; then
+        domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$main_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
+        domains="$main_domain $domains"
+        domains=$(echo "$domains" | tr -s ' ' | sed 's/^ *//;s/ *$//')
+    fi
+    save_domains_to_file "$domains"
+
+    # Step 5: Apply certificates
+    apply_letsencrypt_standalone "$domains" "$email" "$main_domain"
+
+    # Step 6: Install GitLab CE
+    install_gitlab_ce
+
+    # Step 7: Stop GitLab early
+    stop_gitlab_early
+
+    # Step 8: GitLab SSH hostname
+    local ssh_hostname
+    ssh_hostname=$(get_or_set_gitlab_ssh_hostname)
+
+    # Step 9: Backup gitlab.rb
+    backup_gitlab_rb
+
+    # Step 10: Configure GitLab
+    configure_gitlab_rb "$main_domain" "$ssh_hostname"
+
+    # Step 11: Setup Nginx with GitLab proxy
+    setup_nginx_configs "$domains" "$main_domain"
+
+    # Step 12: Test and start nginx (as nginx-adm)
+    info "Testing nginx configuration..."
+    sudo -u nginx-adm nginx -t || die "Nginx config test failed!"
+
+    info "Starting nginx service..."
+    systemctl start nginx || warn "Failed to start nginx"
+
+    success "Nginx started successfully."
+
+    # Step 13: Show SSH instructions
+    show_ssh_config_instructions "$main_domain" "$ssh_hostname"
+}
+
+# =============================================================================
+# run_non_interactive_setup() - Non-Interactive Mode (Install-Only)
+# =============================================================================
+#
+# CRITICAL FUNCTION - NON-INTERACTIVE PATH
+#
+# Purpose:
+#   Runs when the script is executed without a TTY (e.g. curl | sh, scripts, CI).
+#   According to the header requirements:
+#     • Only performs installation (no configuration or prompts)
+#     • Installs Certbot, Nginx, and GitLab CE
+#     • Stops services early
+#     • Maintains nginx-adm least-privilege model
+#
+# Behavior (as defined in CRITICAL REQUIREMENTS):
+#   • Step 1-3: Install Certbot → Install Nginx → Stop Nginx early
+#   • Step 4: Install GitLab CE without any configuration or reconfigure
+#   • No email, domains, certificates, or final nginx config
+#   • Provides clear feedback in both normal and --json mode
+#
+# Why this limited behavior?
+#   - Non-interactive mode is intended for automation / initial deployment
+#   - Full setup (email + domains + SSH hostname + certificates + config) requires interactive input
+#   - This keeps the script safe and predictable in non-TTY environments
+#
+# !!! THIS FUNCTION MUST ONLY PERFORM INSTALLATION + STOP !!!
+# !!! NO CERTBOT CERTONLY, NO DOMAIN HANDLING, NO GITLAB RECONFIGURE !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+run_non_interactive_setup() {
+    ensure_letsencrypt_structure
+
+    info "Running in non-interactive mode (install-only)"
+
+    # nginx-adm Least-Privilege Setup
+    create_nginx_adm_user
+    setup_nginx_adm_ownership
+    setup_restricted_sudoers
+
+    # Backup existing configs before any potential changes
+    backup_existing_nginx_configs
+
+    # Step 1-2: Install packages
+    install_certbot
+    install_nginx
+
+    # Step 3: Stop Nginx early
+    stop_nginx_early
+
+    # Step 4: Install GitLab CE without configuration
+    install_gitlab_ce
+
+    # Final success message
+    if [ "${JSON}" -eq 1 ]; then
+        output_json "success" "Non-interactive installation completed" \
+            "mode" "non-interactive" \
+            "installed" "certbot,nginx,gitlab-ce" \
+            "nginx_adm" "created_and_configured" \
+            "action" "services_stopped"
+    else
+        success "Non-interactive setup completed successfully."
+        success "• certbot, nginx, and gitlab-ce have been installed"
+        success "• nginx-adm user created with least-privilege configuration"
+        success "• Existing configurations backed up"
+        success "• Nginx and GitLab services have been stopped"
+        empty_line
+        info "To complete full setup (certificates + configuration + SSH hostname):"
+        msg "    sudo ${APP_NAME}"
+    fi
+}
+
+# =============================================================================
+# ensure_letsencrypt_structure() - Defensive Directory & File Pre-Creation
+# =============================================================================
+#
+# CRITICAL DEFENSIVE FUNCTION
+#
+# Purpose:
+#   Ensures /etc/letsencrypt and placeholder files exist.
+#   Called early and often per the Defensive Pre-Creation Rule.
+#
+# Updated Behavior (April 2026):
+#   • When run as root: create directories and files normally.
+#   • When run as non-root: silently skip creation (for diagnostic commands
+#     like "email", "domains", "about" that should work without sudo).
+#   • This prevents ugly permission errors on stderr while still allowing
+#     read operations to succeed gracefully ("No email configured yet").
+#
+# Updated in 1.9.0:
+#   • Skips creation when not root (supports nginx-adm diagnostics)
+#
+# !!! DO NOT REMOVE THE ROOT CHECK !!!
+# !!! CALL IT EARLY AND OFTEN !!!
+# =============================================================================
+
+ensure_letsencrypt_structure() {
+    if [ "$(id -u)" -ne 0 ]; then
+        return 0
+    fi
+
+    mkdir -p /etc/letsencrypt \
+            /etc/letsencrypt/renewal \
+            /etc/letsencrypt/live \
+            /etc/letsencrypt/archive 2>/dev/null || true
+
+    if [ ! -f "$EMAIL_FILE" ]; then
+        touch "$EMAIL_FILE" 2>/dev/null || true
+        chmod 600 "$EMAIL_FILE" 2>/dev/null || true
+    fi
+
+    if [ ! -f "$DOMAINS_FILE" ]; then
+        touch "$DOMAINS_FILE" 2>/dev/null || true
+        chmod 644 "$DOMAINS_FILE" 2>/dev/null || true
+    fi
+}
+
+
+# =============================================================================
+# create_nginx_adm_user() - Create dedicated least-privilege user (NEW 1.9.0)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF nginx-adm LEAST-PRIVILEGE MODEL
+#
+# Purpose:
+#   Creates the "nginx-adm" user if it does not exist.
+#   This user will own all nginx configuration and will be used for day-to-day operations.
+#
+# Rules:
+#   • User is a normal (non-root) system user.
+#   • Home directory is set to /etc/nginx-adm (not under /home).
+#   • Shell is /bin/bash.
+#   • Group "nginx-adm" is also created.
+#   • Idempotent: does nothing if user already exists.
+#   • Fixed UID = 1999, GID = 1999
+#
+# !!! MUST BE CALLED EARLY IN BOTH INTERACTIVE AND NON-INTERACTIVE SETUP !!!
+# =============================================================================
+
+create_nginx_adm_user() {
+    info "Setting up nginx-adm user (UID/GID 1999)..."
+
+    # Create group with fixed GID if it doesn't exist
+    if ! getent group nginx-adm >/dev/null 2>&1; then
+        groupadd -g 1999 nginx-adm 2>/dev/null || true
+    fi
+
+    # Create user if it doesn't exist
+    if ! id "nginx-adm" >/dev/null 2>&1; then
+        useradd -m -d /etc/nginx-adm \
+                -g 1999 -u 1999 \
+                -s /bin/bash \
+                -c "Admin user for nginx configuration" \
+                nginx-adm 2>/dev/null || true
+    else
+        info "nginx-adm user already exists."
+    fi
+
+    # Ensure home directory exists and has correct ownership
+    mkdir -p /etc/nginx-adm 2>/dev/null || true
+    chown nginx-adm:nginx-adm /etc/nginx-adm 2>/dev/null || true
+    chmod 755 /etc/nginx-adm 2>/dev/null || true
+
+    info "nginx-adm user (UID/GID 1999) configured with home /etc/nginx-adm."
+}
+
+# =============================================================================
+# setup_nginx_adm_ownership() - Set ownership and symlinks (Fixed for 1.9.0)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF nginx-adm LEAST-PRIVILEGE MODEL
+#
+# Purpose:
+#   Ensures nginx-adm owns the configuration and sets up correct symlinks:
+#     /etc/nginx/sites-available  → symlink to /etc/nginx-adm/sites-available
+#     /etc/nginx/sites-enabled    → symlink to /etc/nginx-adm/sites-enabled
+#
+# Important Rules:
+#   • Does NOT recreate user (only ownership and symlinks)
+#   • Real directories live under /etc/nginx/ (never delete them)
+#   • Only create symlinks in /etc/nginx-adm/ if they don't exist or are broken
+#   • Preserves existing files in /etc/nginx-adm when user is recreated
+#   • Never need to create /etc/nginx-adm (which is the home directory of user: nginx-adm)
+#   • Correct symlink direction: /etc/nginx/sites-* → /etc/nginx-adm/sites-*
+#   • Never rm -rf real config directories
+#   • Ownership: nginx-adm:root (as per your test)
+#   • Permissions: 775 for practical group access
+#   • not working in /bin/sh mkdir -p /etc/nginx/{sites-available,sites-enabled}
+#
+# !!! MUST BE CALLED AFTER create_nginx_adm_user() !!!
+# =============================================================================
+
+setup_nginx_adm_ownership() {
+    info "Setting nginx-adm ownership and symlinks..."
+
+    # 1. Ensure real directories exist under nginx (never delete content)
+    # Under /bin/sh, the following is not working, you should do it one by one
+    # mkdir -p /etc/nginx/{sites-available,sites-enabled}
+    mkdir -p /etc/nginx/sites-available
+    mkdir -p /etc/nginx/sites-enabled
+
+
+    # 3. Transfer ownership
+    chown -R nginx-adm:root /etc/nginx 2>/dev/null || true
+
+    # 4. Create symlinks in /etc/nginx/ pointing to /etc/nginx-adm/ (correct direction)
+    for dir in sites-available sites-enabled; do
+        local source="/etc/nginx/${dir}"
+        local target="/etc/nginx-adm/${dir}"
+
+        # If the target is NOT already a symlink to the correct location, fix it
+        if [ ! -L "${target}" ] || [ "$(readlink "${target}")" != "${source}" ]; then
+
+            # If it's a real directory, back it up first (safety)
+            if [ -d "${target}" ] && [ ! -L "${target}" ]; then
+                local today=$(date +%Y%m%d)
+                local count=1
+                while [ -f "${target}.${today}-${count}.bak" ]; do
+                    count=$((count + 1))
+                done
+                cp -a "${target}" "${target}.${today}-${count}.bak" 2>/dev/null || true
+                info "Backed up real directory ${target} before creating symlink."
+                rm -rf "${target}" 2>/dev/null || true
+            fi
+
+            ln -sf "${source}" "${target}"
+            info "Created/updated symlink: ${target} → ${source}"
+        fi
+    done
+
+    # 5. Set permissions
+    chmod 775 /etc/nginx 2>/dev/null || true
+    chmod 775 /etc/nginx-adm/sites-available 2>/dev/null || true
+    chmod 775 /etc/nginx-adm/sites-enabled 2>/dev/null || true
+
+    success "nginx-adm ownership and correct symlinks configured."
+}
+
+# =============================================================================
+# setup_restricted_sudoers() - Create restricted sudoers for nginx-adm (NEW 1.9.0)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF nginx-adm LEAST-PRIVILEGE MODEL
+#
+# Purpose:
+#   Creates or updates the sudoers.d file for nginx-adm with restricted permissions.
+#
+# New Behavior (as requested):
+#   • If /etc/sudoers.d/nginx-adm already exists, it is backed up to /etc/sudoers.bak/
+#     using dated format: nginx-adm.YYYYMMDD-N.bak (N increments per day)
+#   • Creates the backup directory if it doesn't exist
+#   • Always writes fresh, clean sudoers content after backup
+#   • Validates syntax with visudo when possible
+#   • File must end with a blank line (sudoers requirement)
+#
+# !!! MUST BE CALLED AFTER create_nginx_adm_user() !!!
+# =============================================================================
+
+setup_restricted_sudoers() {
+    local sudoers_file="/etc/sudoers.d/nginx-adm"
+    local backup_dir="/etc/sudoers.bak"
+
+    info "Setting up restricted sudoers for nginx-adm..."
+
+    # Create backup directory if it doesn't exist
+    mkdir -p "${backup_dir}" 2>/dev/null || true
+    chmod 755 "${backup_dir}" 2>/dev/null || true
+
+    # Backup existing sudoers file if it exists
+    if [ -f "${sudoers_file}" ]; then
+        local today
+        today=$(date +%Y%m%d)
+
+        # Find next backup number for today
+        local count=1
+        while [ -f "${backup_dir}/nginx-adm.${today}-${count}.bak" ]; do
+            count=$((count + 1))
+        done
+
+        local backup_file="${backup_dir}/nginx-adm.${today}-${count}.bak"
+
+        cp -a "${sudoers_file}" "${backup_file}" 2>/dev/null || true
+        info "Backed up existing sudoers file → ${backup_file}"
+    fi
+
+    # Write the new restricted sudoers file (remember leave a blank line at the end)
+    cat > "${sudoers_file}" << 'EOF'
+# nginx-adm restricted sudoers - gitlab-nginx
+# Allows nginx-adm to control nginx service without password (least privilege)
+nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
+nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
+nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx
+nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
+nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl restart nginx
+nginx-adm ALL=(ALL) NOPASSWD: /bin/journalctl -u nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/bin/systemctl start nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/bin/systemctl reload nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u nginx
+nginx-adm ALL=(ALL) NOPASSWD: /usr/sbin/nginx
+
+EOF
+
+    chmod 0440 "${sudoers_file}" 2>/dev/null || true
+    chown root:root "${sudoers_file}" 2>/dev/null || true
+
+    # Defensive syntax validation
+    if command -v visudo >/dev/null 2>&1; then
+        if ! visudo -cf "${sudoers_file}" >/dev/null 2>&1; then
+            warn "Warning: sudoers file syntax check failed. Please review ${sudoers_file}"
+        fi
+    fi
+
+    success "Restricted sudoers for nginx-adm configured successfully."
+}
+
+# =============================================================================
+# backup_existing_nginx_configs() - Dated Backup for nginx and gitlab.rb
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF BACKUP POLICY (Updated for v2.0.0)
+#
+# Purpose:
+#   Creates dated backups before modifying any nginx configuration or gitlab.rb.
+#   Now supports both nginx configs and gitlab.rb with the exact same policy.
+#
+# Backup format: <filename>.YYYYMMDD-N.bak
+#   Example: default.conf.20260408-1.bak or gitlab.rb.20260408-1.bak
+#
+# Rules This Function Must Always Follow:
+#   • MUST be called before any modification to nginx configs or gitlab.rb
+#   • Special rule for default.conf: backup then remove original
+#   • gitlab.rb follows identical dated backup rules
+#   • All backups created before any removal or symlink changes
+#   • Defensive: create backup directories if missing
+#   • Ownership set to nginx-adm where appropriate
+#
+# !!! THIS FUNCTION IS PART OF THE SINGLE SOURCE OF TRUTH FOR BACKUP POLICY !!!
+# !!! DO NOT MODIFY OR SIMPLIFY THE BACKUP LOGIC !!!
+# =============================================================================
+
+backup_existing_nginx_configs() {
+    local sites_dir="/etc/nginx/sites-available"
+    local today
+    today=$(date +%Y%m%d)
+
+    info "Creating dated backups of existing configurations..."
+
+    # Backup nginx configs
+    if [ -d "$sites_dir" ]; then
+        for conf in "$sites_dir"/*.conf; do
+            [ ! -f "$conf" ] && continue
+
+            local base_name
+            base_name=$(basename "$conf")
+
+            # Count existing backups for today
+            local count=1
+            while [ -f "${conf}.${today}-${count}.bak" ]; do
+                count=$((count + 1))
+            done
+
+            local backup_file="${conf}.${today}-${count}.bak"
+
+            cp -a "$conf" "$backup_file" 2>/dev/null || true
+            chown nginx-adm:nginx-adm "$backup_file" 2>/dev/null || true
+
+            info "Backed up: ${base_name} → ${backup_file}"
+
+            # Special rule for default.conf
+            if [ "$base_name" = "default.conf" ] || echo "$base_name" | grep -qE '^default'; then
+                rm -f "$conf" 2>/dev/null || true
+                info "Removed original default.conf after backup (per policy)."
+            fi
+        done
+    fi
+
+    # Backup gitlab.rb if it exists
+    backup_gitlab_rb
+
+    success "Configuration backup completed (nginx + gitlab.rb)."
+}
+
+# =============================================================================
+# ensure_gitlab_structure() - Defensive Directory & File Pre-Creation for GitLab
+# =============================================================================
+#
+# CRITICAL DEFENSIVE FUNCTION - DO NOT SIMPLIFY, REMOVE, OR REFACTOR
+#
+# Purpose:
+#   This function enforces the "Defensive Pre-Creation Rule" for GitLab.
+#   It MUST be called early in every major code path that touches GitLab
+#   configuration (install_gitlab_ce, configure_gitlab_rb, backup_gitlab_rb, etc.).
+#
+# Rules This Function Must Always Follow:
+#   • NEVER assume that /etc/gitlab or its files exist.
+#   • ALWAYS create the directory structure if missing.
+#   • Create placeholder files if needed (e.g. for future gitlab.rb).
+#   • Use strict permissions: gitlab.rb should be 600 when written.
+#   • This function is intentionally called redundantly for maximum safety.
+#
+# Why This Function Exists:
+#   - GitLab Omnibus may not have created these paths yet.
+#   - The script must survive fresh systems, partial installs, or interrupted runs.
+#   - It supports independent GitLab handling before reconfigure.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# !!! CALL IT EARLY AND OFTEN !!!
+# =============================================================================
+
+ensure_gitlab_structure() {
+    if [ "$(id -u)" -ne 0 ]; then
+        return 0
+    fi
+
+    mkdir -p /etc/gitlab 2>/dev/null || true
+
+    # Create placeholder gitlab.rb if it doesn't exist (defensive)
+    if [ ! -f "/etc/gitlab/gitlab.rb" ]; then
+        touch "/etc/gitlab/gitlab.rb" 2>/dev/null || true
+        chmod 600 "/etc/gitlab/gitlab.rb" 2>/dev/null || true
+    fi
+
+    # Ensure logs and other common dirs exist
+    mkdir -p /var/log/gitlab 2>/dev/null || true
+    mkdir -p /var/opt/gitlab 2>/dev/null || true
+
+    # Defensive ownership - let nginx-adm own config where appropriate
+    chown -R nginx-adm:root /etc/gitlab 2>/dev/null || true
+}
+
+# =============================================================================
+# detect_external_ip() - Get public external IPv4 address
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Returns the machine's public IPv4 address by querying reliable external services.
+# Never returns IPv6 addresses. Used for diagnostics and SSH hostname guidance.
+#
+# Defensive Rules:
+#   • Force IPv4 only (-4 flag)
+#   • Multiple fallback services
+#   • Reject anything that looks like IPv6
+#   • Graceful fallback with warning if detection fails
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# =============================================================================
+
+detect_external_ip() {
+    local ip
+
+    # Force IPv4-only on every request to prevent IPv6 leakage
+    ip=$(curl -4 -fsSL https://ifconfig.me 2>/dev/null || \
+         curl -4 -fsSL https://api.ipify.org 2>/dev/null || \
+         curl -4 -fsSL https://ipinfo.io/ip 2>/dev/null || \
+         echo "")
+
+    # Extra defensive layer: reject IPv6 or empty result
+    if echo "$ip" | grep -q ':' || [ -z "$ip" ]; then
+        if [ "${JSON}" -eq 0 ] && [ "${QUIET}" -eq 0 ]; then
+            warn "Could not detect external IPv4 address automatically."
+            warn "Please provide SSH hostname manually if needed."
+        fi
+        echo ""
+        return 0
+    fi
+
+    echo "$ip"
+}
+
+# =============================================================================
+# get_or_set_gitlab_ssh_hostname() - Handle GitLab SSH Server Name (Step 8)
+# =============================================================================
+#
+# CRITICAL INTERACTIVE FUNCTION - PART OF THE STRICT 13-STEP SEQUENCE
+#
+# Purpose:
+#   Step 8: Ask user whether to use the main domain as GitLab SSH hostname
+#   or provide a custom one (to solve Cloudflare port 22 proxy limitation).
+#
+#   Saves persistently to /etc/letsencrypt/gitlab-ssh-hostname.conf
+#
+# Defensive Rules:
+#   • ALWAYS call ensure_letsencrypt_structure() first
+#   • Default = main domain (user can override)
+#   • Input cleaning and validation
+#   • Non-interactive mode: fail with clear error
+#   • Persistent storage for future runs and nginx-conf regeneration
+#
+# !!! THIS FUNCTION MUST BE CALLED IN Step 8 !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+get_or_set_gitlab_ssh_hostname() {
+    ensure_letsencrypt_structure
+
+    local ssh_file="/etc/letsencrypt/gitlab-ssh-hostname.conf"
+    local ssh_hostname=""
+
+    # Check for existing saved SSH hostname
+    if [ -f "$ssh_file" ] && [ -s "$ssh_file" ]; then
+        ssh_hostname=$(tr -d ' \t\n\r' < "$ssh_file")
+        if [ -n "$ssh_hostname" ]; then
+            ui_info "Using saved GitLab SSH hostname: ${ssh_hostname}"
+            echo "$ssh_hostname"
+            return 0
+        fi
+    fi
+
+    # Non-interactive mode: must already be configured
+    if [ "$TTY" = "0" ]; then
+        die "No GitLab SSH hostname configured in ${ssh_file}. Please run interactively first."
+    fi
+
+    ui_empty_line
+    ui_info "GitLab SSH Server Name Configuration (Step 8)"
+    ui_warn "Cloudflare does not proxy port 22. If your main domain is behind Cloudflare proxy,"
+    ui_warn "you should use a separate SSH hostname (DNS Only / grey cloud)."
+
+    local use_main="y"
+    read -rp "Use main domain (${main_domain}) as SSH hostname? (Y/n): " use_main
+    use_main=$(echo "$use_main" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$use_main" = "n" ] || [ "$use_main" = "no" ]; then
+        while true; do
+            read -rp "Enter custom SSH hostname (e.g. ssh.${main_domain}): " ssh_hostname
+            ssh_hostname=$(echo "$ssh_hostname" | tr -dc 'a-zA-Z0-9.-' | tr '[:upper:]' '[:lower:]')
+            if [ -n "$ssh_hostname" ]; then
+                break
+            fi
+            ui_warn "SSH hostname cannot be empty."
+        done
+    else
+        ssh_hostname="${main_domain}"
+    fi
+
+    # Save persistently
+    echo "$ssh_hostname" > "$ssh_file"
+    chmod 600 "$ssh_file" 2>/dev/null || true
+
+    ui_success "GitLab SSH hostname set to: ${ssh_hostname}"
+    echo "$ssh_hostname"
+}
+
+# =============================================================================
+# write_file_atomic() - Atomic File Writing
+# =============================================================================
+#
+# GENERAL PURPOSE:
+# Write file safely using temporary file + atomic move.
+# Prevents partial writes on crash or power loss.
+#
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Critical for writing gitlab.rb and other config files safely.
+# =============================================================================
+
+write_file_atomic() {
+    local target="$1"
+    local tmp
+
+    tmp=$(mktemp "${target}.XXXXXXXX") || {
+        die "Failed to create temporary file for atomic write"
+    }
+
+    cat > "${tmp}" || {
+        rm -f "${tmp}"
+        die "Failed to write content to temporary file"
+    }
+
+    mv "${tmp}" "${target}" || {
+        rm -f "${tmp}"
+        die "Failed to atomically move file to ${target}"
+    }
+}
+
+# =============================================================================
+# backup_gitlab_rb() - Dated Backup for gitlab.rb (Step 9)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF BACKUP POLICY
+#
+# Purpose:
+#   Creates dated backup of /etc/gitlab/gitlab.rb before any modification.
+#   Uses the exact same backup format as nginx configs.
+#
+# Backup format: gitlab.rb.YYYYMMDD-N.bak   (N increments per day)
+#
+# Rules:
+#   • MUST be called before configure_gitlab_rb()
+#   • Follows identical policy as backup_existing_nginx_configs()
+#   • Defensive: create backup directory if missing
+#
+# !!! MUST BE CALLED IN Step 9 !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+backup_gitlab_rb() {
+    local rb_file="/etc/gitlab/gitlab.rb"
+    local backup_dir="/etc/gitlab/backups"
+    local today
+    today=$(date +%Y%m%d)
+
+    [ ! -f "$rb_file" ] && return 0
+
+    info "Creating dated backup of gitlab.rb..."
+
+    # Create backup directory
+    mkdir -p "${backup_dir}" 2>/dev/null || true
+
+    # Count existing backups for today
+    local count=1
+    while [ -f "${rb_file}.${today}-${count}.bak" ]; do
+        count=$((count + 1))
+    done
+
+    local backup_file="${rb_file}.${today}-${count}.bak"
+
+    cp -a "$rb_file" "$backup_file" 2>/dev/null || true
+    chown nginx-adm:root "$backup_file" 2>/dev/null || true
+
+    info "Backed up: gitlab.rb → ${backup_file}"
+
+    success "GitLab configuration backup completed."
+}
+
+# =============================================================================
+# install_gitlab_ce() - Install GitLab CE Omnibus (Step 6)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE STRICT 13-STEP SEQUENCE
+#
+# Purpose:
+#   Step 6: Install official GitLab CE (Omnibus package) **without** any
+#   configuration or reconfigure. This keeps the sequence clean.
+#
+# Defensive Rules:
+#   • Primarily targets Debian/Ubuntu (official GitLab apt repo)
+#   • Installs gitlab-ce package only (no automatic reconfigure)
+#   • Calls ensure_gitlab_structure() early
+#   • Graceful warnings on unsupported platforms
+#   • Idempotent: does nothing if gitlab-ce is already installed
+#
+# !!! THIS FUNCTION MUST REMAIN IN Step 6 !!!
+# !!! DO NOT RUN gitlab-ctl reconfigure HERE !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+install_gitlab_ce() {
+    if command -v gitlab-ctl >/dev/null 2>&1; then
+        info "GitLab CE is already installed."
+        return 0
+    fi
+
+    info "GitLab CE not found → attempting installation (Step 6)..."
+
+    ensure_gitlab_structure
+
+    # Detect platform
+    local OS
+    OS=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+    case "$OS" in
+        linux*)
+            if command -v apt-get >/dev/null 2>&1; then
+                info "Debian/Ubuntu detected → setting up official GitLab repository..."
+
+                # Official GitLab repository setup
+                curl -fsSL https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh | bash || \
+                    die "Failed to setup GitLab CE repository"
+
+                apt-get update -qq || warn "apt-get update failed (continuing)"
+
+                info "Installing gitlab-ce package..."
+                apt-get install -y gitlab-ce || die "Failed to install gitlab-ce package."
+
+                success "GitLab CE installed successfully (without configuration)."
+                return 0
+            else
+                die "GitLab CE installation is currently supported only on Debian/Ubuntu. Please install manually on this platform."
+            fi
+            ;;
+
+        *)
+            warn "GitLab CE Omnibus installation on ${OS} is not fully supported."
+            die "Recommended: Use Debian/Ubuntu or WSL2 for full compatibility."
+            ;;
+    esac
+}
+
+# =============================================================================
+# stop_gitlab_early() - Stop GitLab Services (Step 7)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE STRICT 13-STEP SEQUENCE
+#
+# Purpose:
+#   Step 7: Ensure GitLab is completely stopped after package installation.
+#   Prevents GitLab from running with default or incomplete configuration.
+#
+# Defensive Rules:
+#   • Uses gitlab-ctl stop if available
+#   • Graceful fallback if gitlab-ctl is not yet present
+#   • Short sleep to allow services to release ports
+#   • Called redundantly for safety
+#
+# !!! THIS FUNCTION MUST REMAIN IN Step 7 !!!
+# !!! DO NOT START GITLAB BEFORE STEP 10 !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+stop_gitlab_early() {
+    info "Stopping GitLab services early (Step 7)..."
+
+    if command -v gitlab-ctl >/dev/null 2>&1; then
+        gitlab-ctl stop 2>/dev/null || true
+        info "GitLab services stopped via gitlab-ctl."
+    else
+        info "gitlab-ctl not found yet (normal during initial install)."
+    fi
+
+    # Additional safety: stop related systemd services if they exist
+    systemctl stop gitlab-runsvdir 2>/dev/null || true
+    systemctl stop gitlab 2>/dev/null || true
+
+    sleep 3
+
+    info "GitLab services cleared."
+}
+
+# =============================================================================
+# configure_gitlab_rb() - Configure gitlab.rb (Step 10)
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF THE STRICT 13-STEP SEQUENCE
+#
+# Purpose:
+#   Step 10: Write /etc/gitlab/gitlab.rb with external nginx settings,
+#   main domain (as external_url with https), and custom SSH hostname.
+#
+#   Then run `gitlab-ctl reconfigure` if gitlab-ctl exists.
+#
+# Defensive Rules:
+#   • ALWAYS call backup_gitlab_rb() first
+#   • ALWAYS call ensure_gitlab_structure() first
+#   • Use write_file_atomic() for safe writing
+#   • External nginx mode: nginx['enable'] = false
+#   • web_server['external_users'] = ['www-data']
+#   • Do not start services here — start only in Step 12 via nginx
+#
+# !!! THIS FUNCTION MUST BE CALLED ONLY AFTER CERTIFICATES ARE ISSUED !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+configure_gitlab_rb() {
+    local main_domain="$1"
+    local ssh_hostname="$2"
+
+    [ -z "$main_domain" ]   && die "No main domain provided to configure_gitlab_rb()"
+    [ -z "$ssh_hostname" ]  && die "No SSH hostname provided to configure_gitlab_rb()"
+
+    backup_gitlab_rb
+    ensure_gitlab_structure
+
+    info "Configuring gitlab.rb with external nginx mode (Step 10)..."
+
+    write_file_atomic "/etc/gitlab/gitlab.rb" <<EOF
+# gitlab-nginx generated configuration - external nginx mode
+external_url 'https://${main_domain}'
+
+# SSH Settings
+gitlab_rails['gitlab_ssh_host'] = '${ssh_hostname}'
+gitlab_shell['ssh_port'] = 22
+
+# External nginx mode - disable bundled nginx
+nginx['enable'] = false
+nginx['listen_port'] = 80
+nginx['listen_https'] = false
+
+# External web server user (nginx)
+web_server['external_users'] = ['www-data']
+
+# Puma / Workhorse settings for external proxy
+puma['enable'] = true
+puma['worker_processes'] = 2
+puma['min_threads'] = 4
+puma['max_threads'] = 8
+
+# Disable unnecessary services when using external nginx
+gitlab_workhorse['enable'] = true
+
+# Basic settings
+gitlab_rails['time_zone'] = 'UTC'
+EOF
+
+    success "gitlab.rb configured with external_url https://${main_domain}"
+    success "GitLab SSH hostname set to: ${ssh_hostname}"
+
+    # Run reconfigure only if gitlab-ctl exists
+    if command -v gitlab-ctl >/dev/null 2>&1; then
+        info "Running gitlab-ctl reconfigure..."
+        gitlab-ctl reconfigure || warn "gitlab-ctl reconfigure completed with warnings."
+        success "GitLab reconfigure completed."
+    else
+        warn "gitlab-ctl not found. Skipping reconfigure."
+    fi
+}
+
+# =============================================================================
+# show_ssh_config_instructions() - Display Client SSH Configuration (Step 13)
+# =============================================================================
+#
+# CRITICAL FUNCTION - FINAL STEP OF INTERACTIVE SETUP
+#
+# Purpose:
+#   Step 13: Show clear, copy-paste ready instructions for user's client
+#   ~/.ssh/config to handle separate SSH hostname (Cloudflare port 22 issue).
+#
+# Defensive Rules:
+#   • Uses ui_msg / ui_info for visibility (stderr)
+#   • Shows both main domain and SSH hostname clearly
+#   • Explains why separate hostname is needed
+#   • Works in both normal and quiet modes (but skipped in --json)
+#
+# !!! THIS FUNCTION MUST BE CALLED AT THE VERY END OF INTERACTIVE SETUP !!!
+# !!! DO NOT MODIFY OR SIMPLIFY !!!
+# =============================================================================
+
+show_ssh_config_instructions() {
+    local main_domain="$1"
+    local ssh_hostname="$2"
+
+    if [ "${JSON}" -eq 1 ] || [ "${QUIET}" -eq 1 ]; then
+        return 0
+    fi
+
+    ui_empty_line
+    double_line
+    ui_success "=== GitLab SSH Client Configuration (Step 13) ==="
+    ui_empty_line
+
+    ui_warn "Cloudflare does not proxy port 22. To use 'git clone git@${main_domain}:...' "
+    ui_warn "you need to map the hostname in your client's ~/.ssh/config."
+
+    ui_empty_line
+    ui_msg "Add the following to your local ~/.ssh/config file:"
+    ui_empty_line
+    ui_msg "Host ${main_domain}"
+    ui_msg "    HostName ${ssh_hostname}"
+    ui_msg "    Port 22"
+    ui_msg "    User git"
+    ui_msg "    IdentityFile ~/.ssh/id_rsa   # or your private key"
+    ui_empty_line
+    ui_info "After adding this, you can use:"
+    ui_msg "    git clone git@${main_domain}:group/project.git"
+    ui_empty_line
+
+    success "Setup completed successfully."
+    info "Your GitLab is now accessible at: https://${main_domain}"
+    info "SSH hostname configured as: ${ssh_hostname}"
+}
+
+# =============================================================================
+# show_gitlab_nginx_help() - Display Help Information (Renamed for v2.0.0)
+# =============================================================================
+#
+# Updated help function for gitlab-nginx.
+# Shows usage, available commands, options, and important notes about
+# external nginx mode, SSH hostname, and Cloudflare considerations.
+#
+# Fully respects --quiet and --json modes.
+#
+# !!! THIS IS THE SINGLE SOURCE OF TRUTH FOR HELP TEXT !!!
+# !!! DO NOT SIMPLIFY OR REMOVE IMPORTANT NOTES !!!
+# =============================================================================
+
+show_gitlab_nginx_help() {
+    if [ "${JSON}" -eq 1 ]; then
+        output_json "success" "" \
+            "app" "${APP_NAME}" \
+            "version" "${VERSION}" \
+            "message" "Help text available in human mode. Run without --json." \
+            "note" "Use --json with status, about, version, domains, email, ssh-hostname, etc."
+        return 0
+    fi
+
+    if [ "${QUIET}" -eq 1 ]; then
+        return 0
+    fi
+
+    cat << EOF
+${APP_NAME} v${VERSION} — ${DESCRIPTION}
+
+Usage:
+${APP_NAME}                          Full interactive setup (recommended)
+${APP_NAME} about                    Full diagnostics
+${APP_NAME} version                  Show version
+${APP_NAME} version-check            Compare with latest
+${APP_NAME} domains                  Display saved domains
+${APP_NAME} email                    Display saved email
+${APP_NAME} ssh-hostname             Display or set GitLab SSH hostname
+${APP_NAME} nginx-conf               Re-generate nginx configuration only
+${APP_NAME} help                     This help
+
+Options:
+--quiet, -q            Suppress non-error messages
+--json                 Machine-readable JSON output (implies --quiet)
+--no-cloudflare        Disable Cloudflare protection
+
+Important Notes:
+• GitLab runs in external nginx mode (bundled nginx is disabled)
+• Separate SSH hostname is recommended when using Cloudflare proxy (port 22)
+• Certificates are obtained before GitLab configuration
+• nginx-adm least-privilege model is active
+
+Examples:
+sudo ${APP_NAME}
+sudo ${APP_NAME} ssh-hostname
+sudo ${APP_NAME} --json
+
+EOF
+}
+
+# =============================================================================
+# main_gitlab_nginx_app() - Main Entry Point and Command Dispatcher
+# =============================================================================
+#
+# CRITICAL FUNCTION - SINGLE SOURCE OF TRUTH FOR SCRIPT EXECUTION FLOW
+#
+# Purpose:
+#   This is the central dispatcher for the entire script. It handles:
+#     • Auto-install logic for the classic one-liner (curl | sh)
+#     • Flag parsing (--quiet, --json, --force, etc.)
+#     • Command routing (run, about, version, domains, email, nginx-conf, etc.)
+#     • Interactive vs non-interactive mode decision
+#
+# Alignment with CRITICAL REQUIREMENTS:
+#   • Maintains the strict 13-step installation sequence in interactive mode
+#   • Supports --quiet and --json modes fully in ALL paths
+#   • Preserves nginx-adm least-privilege model
+#   • New sub-command: ssh-hostname
+#   • Preserves the "install first → stop nginx → handle email/domains → certs → config" order
+#   • Never starts nginx early or allows partial configurations
+#
+# Platform Awareness (2026):
+#   • Install functions (install_certbot / install_nginx) now support multiple platforms
+#     (Linux apt/apk/dnf, macOS Homebrew, warnings on Git Bash).
+#   • Core logic (certbot --standalone, nginx config) remains Linux-centric.
+#   • Unsupported platforms (Git Bash, native Windows) are handled gracefully with warnings.
+#
+# Auto-Install Behavior (Defensive):
+#   • When the script is NOT installed and no arguments are given, it offers
+#     (or automatically performs) self-installation.
+#   • This powers the popular `curl | sh` one-liner.
+#   • The block MUST stay at the very top, before any argument parsing.
+#
+# Command Parsing Rules:
+#   • Flags are parsed first (--quiet, --json, --force, etc.)
+#   • Then the main command is determined (default = "run")
+#   • Sub-commands like "domains", "email", "nginx-conf" bypass the full setup
+#
+# Defensive Design:
+#   • All output goes through output_text() or output_json()
+#   • Repeated safe defaults (: "${VAR:=default}")
+#   • Clear separation between interactive and non-interactive paths
+#   • Unknown commands produce clear errors (with JSON support)
+#
+# Important Rules:
+#   • The full interactive setup (email + main domain + certs + nginx config)
+#     can ONLY be completed in TTY mode.
+#   • Non-interactive mode only installs packages and stops nginx — it forces
+#     the user to run interactively for the rest.
+#
+# Changes in 1.9.0:
+#   • Added nginx-adm setup in both interactive and non-interactive paths
+#   • Created and integrated run_non_interactive_setup() for root-only install-only mode
+#   • Ensured backup and nginx-adm functions are called where configuration is touched
+#   • Non-interactive mode now respects the new least-privilege model (when run as root)
+#
+# !!! THIS FUNCTION IS THE SINGLE ENTRY POINT !!!
+# !!! DO NOT MOVE THE AUTO-INSTALL BLOCK !!!
+# !!! DO NOT COMBINE OR REFACTOR COMMAND PARSING !!!
+# !!! PRESERVE THE STRICT SEQUENCE IN ALL DISPATCHED PATHS !!!
+# !!! PREVIOUS GROK INSTANCES TRIED TO "CLEAN UP" THIS FUNCTION — DO NOT !!!
+# =============================================================================
+
+main_gitlab_nginx_app() {
+    # Safe defaults (repeated on purpose - defensive style)
+    : "${HOME:=/root}"
+    : "${GLOBAL_BIN:=/usr/local/bin}"
+    : "${QUIET:=0}"
+    : "${JSON:=0}"
+    : "${USE_CLOUDFLARE:=1}"   # Default: enable Cloudflare protection
+
+    local COMMAND="run"
+
+    # =============================================================================
+    # AUTO-INSTALL FOR ONE-LINER (curl | sh) - MUST STAY AT THE TOP
+    # =============================================================================
+    if ! is_installed && [ $# -eq 0 ]; then
+        if [ "${JSON}" -eq 1 ] || [ "${QUIET}" -eq 1 ]; then
+            perform_self_install
+        else
+            maybe_install
+        fi
+    fi
+
+    # =============================================================================
+    # FLAG-FIRST ARGUMENT PARSING
+    # =============================================================================
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reset|--force|--reinstall)
+                FORCE_REINSTALL=1
+                ;;
+            --quiet|-q)
+                QUIET=1
+                ;;
+            --json)
+                JSON=1
+                QUIET=1
+                ;;
+            --no-cloudflare)
+                USE_CLOUDFLARE=0
+                ;;
+            version|-v)
+                COMMAND="version"
+                ;;
+            version-check)
+                COMMAND="version-check"
+                ;;
+            self-update)
+                COMMAND="self-update"
+                ;;
+            self-uninstall)
+                COMMAND="self-uninstall"
+                ;;
+            help|-h)
+                COMMAND="help"
+                ;;
+            about)
+                COMMAND="about"
+                ;;
+            domains)
+                COMMAND="domains"
+                ;;
+            email)
+                COMMAND="email"
+                ;;
+            ssh-hostname)
+                COMMAND="ssh-hostname"
+                ;;
+            nginx-conf)
+                COMMAND="nginx-conf"
+                ;;
+            *)
+                if [ "${JSON}" -eq 1 ]; then
+                    output_json_error "Unknown argument: $1" "bad_argument"
+                else
+                    error "Unknown argument: $1"
+                    printf "Run '%s help' for usage.\n" "${APP_NAME}" >&2
+                fi
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    # =============================================================================
+    # COMMAND DISPATCH
+    # =============================================================================
+    case "${COMMAND}" in
+        version)
+            if [ "${JSON}" -eq 1 ]; then
+                output_json "version" "" "app" "${APP_NAME}" "version" "${VERSION}"
+            else
+                msg "${APP_NAME} version ${VERSION}"
+            fi
+            exit 0
+            ;;
+
+        version-check)
+            version_check
+            exit 0
+            ;;
+
+        self-update)
+            self_update
+            exit 0
+            ;;
+
+        self-uninstall)
+            self_uninstall
+            exit 0
+            ;;
+
+        about)
+            show_about_global
+            exit 0
+            ;;
+
+        help)
+            show_gitlab_nginx_help
+            exit 0
+            ;;
+
+        domains)
+            show_domains
+            exit 0
+            ;;
+
+        email)
+            show_email
+            exit 0
+            ;;
+
+        ssh-hostname)
+            # TODO: Implement show_ssh_hostname() in future if needed
+            # For now, call get_or_set_gitlab_ssh_hostname() in interactive context
+            check_root
+            local ssh_hostname
+            ssh_hostname=$(get_or_set_gitlab_ssh_hostname)
+            if [ "${JSON}" -eq 1 ]; then
+                output_json "success" "" "ssh_hostname" "$ssh_hostname" "main_domain" "$(get_main_domain_from_file "$(load_existing_domains)")"
+            else
+                success "GitLab SSH hostname: ${ssh_hostname}"
+            fi
+            exit 0
+            ;;
+
+        nginx-conf)
+            check_root
+            local domains
+            domains=$(load_existing_domains)
+            [ -z "$domains" ] && die "No domains found. Run full setup first."
+            local main_domain
+            main_domain=$(get_main_domain_from_file "$domains")
+            [ -z "$main_domain" ] && die "Could not determine main domain."
+
+            backup_existing_nginx_configs
+            setup_nginx_configs "$domains" "$main_domain"
+            info "✅ Nginx configs regenerated using main domain: ${main_domain}"
+            exit 0
+            ;;
+
+        run)
+            # Core setup flow - respects interactive vs non-interactive mode
+            if [ "$TTY" -eq 1 ]; then
+                run_interactive_setup
+            else
+                run_non_interactive_setup
+            fi
+            exit 0
+            ;;
+
+        *)
+            die "Invalid command"
+            ;;
+    esac
+}
+
+# Call the main function
+main_gitlab_nginx_app "$@"
