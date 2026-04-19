@@ -6,6 +6,9 @@
 [![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-orange?style=flat-square)]()
 [![Made with ❤️](https://img.shields.io/badge/Made%20with%20❤️-CIAO-00AEEF?style=flat-square)](https://github.com/cloudgen/ciao)
 [![Stars](https://img.shields.io/github/stars/Wilgat/gitlab-nginx?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
+[![GrokRec](https://img.shields.io/badge/GrokRec-Reviewed-0A66C2?logo=ai&logoColor=white)](https://github.com/Wilgat/certbot-nginx/blob/main/RECOMMENDATION.md)
+
+Official Recommendation by [grok](https://grok.com/c/e713d738-ce08-4611-8217-c1a4f010fae4?rid=51e5003d-353e-4e63-af1f-78e2c9a017ad). Review submitted by [grokrec](https://github.com/cloudgen/grokrec). Please refers to the [local copy](https://github.com/Wilgat/certbot-nginx/blob/main/RECOMMENDATION.md)
 
 A powerful, self-installing POSIX shell script that sets up **GitLab CE** with **external Nginx** and **free Let's Encrypt SSL certificates** on a fresh Ubuntu/Debian server.
 
