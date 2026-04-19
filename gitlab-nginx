@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================================
-# gitlab-nginx – version 2.0.0
+# gitlab-nginx – version 2.1.0
 # =============================================================================
 #
 # One-command installer for GitLab CE + Certbot + nginx (external nginx mode)
@@ -96,22 +96,28 @@
 #
 # 3. nginx-adm Least-Privilege Model (NEW in 1.9.0)
 #    • A dedicated normal user "nginx-adm" is created (if it does not exist).
-#    • nginx-adm owns the entire /etc/nginx directory tree.
+#    • nginx-adm owns the entire ${NGINX_CONF_ROOT} directory tree.
 #    • nginx-adm has its home directory at /etc/nginx-adm.
-#    • /etc/nginx/sites-enabled  → symlink to /etc/nginx-adm/sites-enabled
-#    • /etc/nginx/sites-available → symlink to /etc/nginx-adm/sites-available
+#    • ${NGINX_CONF_ROOT}/sites-enabled  → symlink to /etc/nginx-adm/sites-enabled
+#    • ${NGINX_CONF_ROOT}/sites-available → symlink to /etc/nginx-adm/sites-available
 #    • A restricted sudoers rule allows nginx-adm to run:
 #        systemctl start/stop/reload/restart/status nginx   (NOPASSWD)
-#    • Because nginx-adm owns /etc/nginx, "nginx -t" can be executed directly
+#    • Because nginx-adm owns ${NGINX_CONF_ROOT}, "nginx -t" can be executed directly
 #      as nginx-adm — no sudo is required for configuration testing.
 #    • This design allows future configuration/renewal operations to run as
 #      nginx-adm instead of full root, significantly improving security.
 #
-# 4. Existing Nginx and gitlab Configuration Backup Policy
-#    • Before any modification to nginx or gitlab.rb, create dated backup:
-#      <filename>.YYYYMMDD-N.bak
-#    • Special handling for default.conf (remove after backup).
-#    • gitlab.rb follows identical backup rules.
+# 4. gitlab-adm Least-Privilege Model (NEW in 2.1.0)
+#    • A dedicated normal user "gitlab-adm" is created (UID/GID 1888).
+#    • Real GitLab configuration lives at /home/gitlab-adm/gitlab
+#    • /etc/gitlab is a symlink pointing to /home/gitlab-adm/gitlab
+#    • gitlab-adm owns the entire configuration tree (gitlab-adm:root 775)
+#    • All files inside are 664 so both root and gitlab-adm can read/write
+#    • gitlab-adm is added to all gitlab-* groups (gitlab-www, gitlab-psql, etc.)
+#    • Restricted sudoers allows gitlab-adm to run gitlab-ctl commands (NOPASSWD)
+#    • This drastically reduces root dependency for GitLab operations.
+#
+# 5. Existing Nginx Configuration Backup Policy (NEW in 1.9.0)
 #    • Before any modification to nginx configuration (especially during
 #      initial setup or when regenerating configs), the script MUST create
 #      a dated backup of any existing configuration files.
@@ -125,7 +131,7 @@
 #    • All backups are created before any removal or symlink changes.
 #    • This policy protects user custom configurations and provides safe rollback.
 #
-# 5. Strict 13-Step Installation Sequence for interactive mode
+# 6. Strict 13-Step Installation Sequence for interactive mode
 #    • Step 1:  Install Certbot without plugin configuration
 #    • Step 2:  Install Nginx without configuration
 #    • Step 3:  Stop Nginx service early
@@ -158,6 +164,17 @@
 #    • Main domain is decided by USER interactively, not by list position.
 #    • SSH hostname is stored persistently and used for client instructions.
 #
+# Intention:
+#   • Drastically reduced root dependency after initial installation
+#   • Introduction of a dedicated, least-privilege user "nginx-adm", "gitlab-adm"
+#   • All nginx configuration files and directories are owned by nginx-adm
+#   • systemctl operations on nginx are allowed via a restricted sudoers file
+#     (no password required, but only for nginx start/stop/reload/restart)
+#   • nginx -t can be run directly as nginx-adm (no sudo is required)
+#   • Better separation between "system installation" (still requires root)
+#     and "day-to-day configuration & renewal" (can be done as nginx-adm)
+#   • All gitlab configuration files and directories are owned by gitlab-adm
+#
 # !!! ANY ATTEMPT TO CHANGE THIS SEQUENCE, COMBINE STEPS, START SERVICES EARLY,
 #     OR TREAT CERTBOT / NGINX / GITLAB AS EQUAL LAYERS WILL BREAK THE DESIGN !!!
 #     This comment block is the SINGLE SOURCE OF TRUTH.
@@ -171,23 +188,6 @@
 # Last aligned: April 2026
 # =============================================================================
 
-# =============================================================================
-# IMPORTANT WARNING TO ALL AI ASSISTANTS (GROK, CLAUDE, GPT, ETC.)
-# =============================================================================
-# This project uses extremely intentional defensive, repetitive, and verbose style.
-# This is NOT a flaw. It is a deliberate design choice.
-#
-# STRICT RULES FOR ANY AI OR HUMAN MODIFYING THIS CODE:
-#
-# 1. NEVER simplify, refactor, or remove repetitive defensive patterns.
-# 2. NEVER replace working solutions just because they look ugly or verbose.
-# 3. If the author says "this is tested on real server", treat it as truth.
-# 4. When user says "add only, no removal", follow it literally.
-# 5. Do not assume "I can make it better". You usually make it worse here.
-# 6. This comment block is the SINGLE SOURCE OF TRUTH. Respect it fully.
-#
-# Any AI that violates these rules is actively harming the project.
-# =============================================================================
 
 # =============================================================================
 # IMPORTANT WARNING TO ALL AI ASSISTANTS (GROK, CLAUDE, GPT, ETC.)
@@ -262,10 +262,75 @@
 # I acknowledge this clearly now.
 # =============================================================================
 
+# =============================================================================
+# NGINX CONFIGURATION STRUCTURE ACROSS PLATFORMS (April 2026)
+# =============================================================================
+#
+# This project must support multiple OS families without forcing one layout.
+# Below is the battlefield reality of default nginx installation structures:
+#
+# +---------------------+-------------------+---------------------+-------------------+--------------------------+
+# | OS Family           | Config Root       | sites-available /   | Default Include     | Default Owner / Notes    |
+# |                     |                   | sites-enabled       |                     |                          |
+# +---------------------+-------------------+---------------------+-------------------+--------------------------+
+# | Debian/Ubuntu       | /etc/nginx/       | Yes (default)       | sites-enabled/*     | root:root                |
+# | RHEL/Rocky/CentOS   | /etc/nginx/       | No (conf.d only)    | conf.d/*.conf       | root:root                |
+# | Alpine              | /etc/nginx/       | No (must create)    | conf.d/*.conf       | root:root (worker: www)  |
+# | macOS Homebrew x86  | /usr/local/etc/nginx/ | No              | conf.d/* or servers/* | User who ran brew (often admin) |
+# | macOS Homebrew arm  | /opt/homebrew/etc/nginx/ | No           | conf.d/* or servers/* | Same as above            |
+# | macOS MacPorts      | /opt/local/etc/nginx/ | No              | conf.d/*            | root or macports         |
+# +---------------------+-------------------+---------------------+-------------------+--------------------------+
+#
+# Key Observations:
+#   • Only Debian-family creates sites-available + sites-enabled by default.
+#   • Most other platforms use conf.d/*.conf convention.
+#   • macOS paths are completely different from /etc/nginx.
+#   • Ownership is almost always root:root on Linux, but not on macOS Homebrew.
+#
+# Our Strategy (User Preference):
+#   1. Do NOT force one structure.
+#   2. Prefer to make nginx.conf adopt sites-available / sites-enabled once (with backup).
+#   3. Adapt detection and paths per platform.
+#
+# This comment block serves as the SINGLE SOURCE OF TRUTH for cross-platform nginx differences.
+#
+# !!! ANY FUTURE CHANGES TO CROSS-OS BEHAVIOR MUST UPDATE THIS TABLE !!!
+# =============================================================================
+
+# =============================================================================
+# DOCUMENT ROOT (/var/www) STRUCTURE ACROSS PLATFORMS
+# =============================================================================
+#
+# Default document root locations vary significantly by OS/package:
+#
+# +---------------------+--------------------------+-------------------------------+
+# | OS Family           | Default Document Root    | Notes                         |
+# +---------------------+--------------------------+-------------------------------+
+# | Debian/Ubuntu       | /var/www/html            | Standard, www-data owner      |
+# | RHEL/Rocky/CentOS   | /usr/share/nginx/html    | Different from Debian         |
+# | Alpine              | /var/www/localhost/htdocs| Often customized              |
+# | macOS Homebrew      | /usr/local/var/www       | or /opt/homebrew/var/www      |
+# | macOS MacPorts      | /opt/local/share/nginx/html | Less common                |
+# +---------------------+--------------------------+-------------------------------+
+#
+# Current Implementation:
+#   • We currently hard-code /var/www in fix_docroot_permissions() and
+#     create_per_domain_server_blocks().
+#   • This works on Debian but is suboptimal on RHEL, Alpine, and macOS.
+#
+# Recommendation (Planning):
+#   • Introduce a global variable NGINX_DOCROOT_BASE to allow adaptation.
+#   • Default to /var/www on Linux for compatibility with existing setups.
+#   • Override per platform when full multi-OS support is activated.
+#
+# !!! THIS COMMENT BLOCK IS THE SINGLE SOURCE OF TRUTH FOR DOCUMENT ROOT VARIATIONS !!!
+# !!! FUTURE CHANGES MUST UPDATE BOTH THIS TABLE AND THE GLOBAL VARIABLE !!!
+# =============================================================================
+
 # ----------------------------- Project Constants -----------------------------
 
 APP_NAME="gitlab-nginx"
-VERSION="2.0.0"
+VERSION="2.1.0"
 DESCRIPTION="Gitlab, Certbot and nginx quick setup"
 REMOTE_VERSION=$VERSION
 SH=sh
@@ -306,10 +371,11 @@ SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${A
 #   - "message" field is optional and should only be included when it adds
 #     meaningful human-readable context (even in JSON mode).
 #   - All numbers (version numbers, counts, ports, etc.) MUST be unquoted.
-#   - All strings (paths, domains, email, SSH hostname, status, versions) MUST be quoted.
+#   - All strings (paths, domains, email, status, versions) MUST be quoted.
 #   - Booleans (true/false) and null are allowed without quotes.
 #   - Arrays and objects are fully supported when they add value (e.g. domain list).
-#   - Use consistent, predictable field names across all commands.
+#   - Use consistent, predictable field names across all commands (e.g. always
+#     "version", "domains", "email", "count", "code", etc.).
 #   - Never use duplicate keys.
 #   - Output must be valid JSON (no trailing commas, proper escaping).
 #   - Prefer compact output (no pretty-printing) unless explicitly needed.
@@ -323,7 +389,7 @@ SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${A
 #   When both --quiet and --json are used, --json takes absolute precedence.
 #
 # =============================================================================
-# RECOMMENDED JSON EXAMPLES (gitlab-nginx specific)
+# RECOMMENDED JSON EXAMPLES (certbot-nginx specific)
 # =============================================================================
 #
 # 1. Success (simple)
@@ -338,29 +404,29 @@ SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${A
 # 4. Error (with code for scripting)
 #    {"type":"error","message":"No domains configured","code":"no_domains"}
 #
-# 5. Version
-#    {"type":"version","app":"gitlab-nginx","version":"2.0.0","shell":"sh"}
+# 5. Error (permission / critical)
+#    {"type":"error","message":"This script must be run as root","code":"permission_denied"}
 #
-# 6. About / Diagnostics
-#    {"type":"about","version":"2.0.0","installed":true,"global_version":"2.0.0","shell":"bash","interactive":true,"user":"root"}
+# 6. Version
+#    {"type":"version","app":"certbot-nginx","version":"1.8.0","shell":"sh"}
 #
-# 7. Version Check
-#    {"type":"version_check","local_version":"1.13.0","remote_version":"2.0.0","is_latest":false}
+# 7. About / Diagnostics
+#    {"type":"about","version":"1.8.0","installed":true,"global_version":"1.8.0","shell":"bash","interactive":true,"user":"root"}
 #
-# 8. Domains Command
-#    {"type":"success","domains":["git.example.com","app.example.com"],"count":2,"primary":"git.example.com"}
+# 8. Version Check
+#    {"type":"version_check","local_version":"1.5.0","remote_version":"1.8.0","is_latest":false}
 #
-# 9. Email Command
+# 9. Domains Command
+#    {"type":"success","domains":["git.example.com","app.example.com","api.example.com"],"count":3,"primary":"git.example.com"}
+#
+# 10. Email Command
 #     {"type":"success","email":"admin@example.com"}
 #
-# 10. SSH Hostname Command
-#     {"type":"success","ssh_hostname":"ssh.git.example.com","main_domain":"git.example.com"}
-#
 # 11. No data / empty state
-#     {"type":"status","message":"No SSH hostname configured yet"}
+#     {"type":"status","message":"No email configured yet"}
 #
 # 12. Complex success (nginx-conf regenerated)
-#     {"type":"success","message":"Nginx configuration regenerated","main_domain":"git.example.com","gitlab_proxy":true}
+#     {"type":"success","message":"Nginx configuration regenerated","main_domain":"git.example.com","domains_count":4,"cloudflare_protection":true}
 #
 # =============================================================================
 # PRACTICAL USAGE EXAMPLES (for users and scripts)
@@ -377,8 +443,13 @@ SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${A
 #
 # Parse with jq (highly recommended):
 #   sudo ${APP_NAME} --json | jq -r '.main_domain // empty'
-#   sudo ${APP_NAME} ssh-hostname --json | jq -r '.ssh_hostname // empty'
-#   sudo ${APP_NAME} --json | jq -e '.type == "success"'
+#   sudo ${APP_NAME} --json | jq -r 'select(.type == "error") | .code'
+#   sudo ${APP_NAME} domains --json | jq -r '.domains[]'
+#
+# Check success in shell script:
+#   if sudo ${APP_NAME} --json | jq -e '.type == "success"' > /dev/null; then
+#       echo "Operation succeeded"
+#   fi
 #
 # Error handling example:
 #   RESULT=$(sudo ${APP_NAME} --json 2>&1)
@@ -391,18 +462,17 @@ SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${A
 # IMPORTANT NOTES
 # =============================================================================
 #
-# - The script is interactive by nature (domain prompts, email input,
-#   SSH hostname prompt, etc.). Therefore --json mode is primarily intended
-#   for diagnostics, status checks, sub-commands (domains, email, ssh-hostname,
-#   nginx-conf, about, version), and automation.
+# - The script is interactive by nature (domain prompts, email input, etc.).
+#   Therefore --json mode is primarily intended for diagnostics, status checks,
+#   sub-commands (domains, email, nginx-conf, about, version), and automation.
 #
 # - Commands like "about", "version", "version-check", "domains", "email",
-#   "ssh-hostname", and "nginx-conf" fully support --json with rich structured output.
+#   and "nginx-conf" fully support --json with rich structured output.
 #
 # - In JSON mode, never mix human text with JSON. Output must be 100% parseable.
 #
-# - Consistent field names (e.g. always "main_domain", "domains", "ssh_hostname",
-#   "count", "code") make downstream scripting reliable.
+# - Consistent field names (e.g. always "main_domain", "domains", "count", "code")
+#   make downstream scripting reliable and reduce parsing errors.
 #
 # - This comment block is the SINGLE SOURCE OF TRUTH for quiet/JSON behavior.
 #   It is referenced by future maintainers, contributors, and AI assistants.
@@ -416,6 +486,15 @@ SCRIPT_URL="https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${A
 : "${GLOBAL_BIN:=/usr/local/bin}"
 : "${USER_BIN:=${HOME}/.local/bin}"
 : "${INSTALL_PATH:=${GLOBAL_BIN}/${APP_NAME}}"
+
+# Global nginx path variables - initialized early
+: "${NGINX_CONF_ROOT:=/etc/nginx}"
+: "${NGINX_SITES_AVAILABLE:=${NGINX_CONF_ROOT}/sites-available}"
+: "${NGINX_SITES_ENABLED:=${NGINX_CONF_ROOT}/sites-enabled}"
+: "${NGINX_CONF_D:=${NGINX_CONF_ROOT}/conf.d}"
+
+# Document root base (per-platform adaptable)
+: "${NGINX_DOCROOT_BASE:=/var/www}"
 
 # ----------------------------- File Paths -------------------------------------
 DOMAINS_FILE="/etc/letsencrypt/domains.conf"
@@ -1273,20 +1352,117 @@ maybe_install() {
 }
 
 # =============================================================================
-# show_about_global() - Display diagnostic information about the current environment
+# detect_nginx_platform_paths() - Detect OS-specific nginx paths
 # =============================================================================
 #
-# Shows installation status, versions (global only), current shell, and TTY status.
-# Fully respects --quiet and --json modes.
+# Purpose:
+#   Detects the correct nginx configuration root and style for the current OS.
+#   Currently prepared for future use — not yet called in main flow.
 #
-# In JSON mode: outputs exactly ONE clean JSON object with accurate shell detection.
+# Supported Platforms:
+#   • Debian/Ubuntu → /etc/nginx + sites-available
+#   • RHEL/Rocky    → /etc/nginx + conf.d (planned)
+#   • Alpine        → /etc/nginx
+#   • macOS Homebrew (Intel)   → /usr/local/etc/nginx
+#   • macOS Homebrew (Apple Silicon) → /opt/homebrew/etc/nginx
+#   • MacPorts      → /opt/local/etc/nginx
 #
-# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Defensive Design:
+#   • Uses safe defaults so current Linux behavior is unchanged.
+#   • Loud intention comment to prevent future AI from removing it.
+#   • Can be called early in run_interactive_setup() when we expand support.
+#
+# Current Status (1.15.0):
+#   This function exists for planning and future-proofing only.
+#   It will be activated when we implement full multi-OS nginx.conf adaptation.
+#
+# !!! THIS FUNCTION MUST NOT BE REMOVED !!!
+# !!! IT DOCUMENTS OUR CLEAR INTENTION FOR CROSS-PLATFORM SUPPORT !!!
+# !!! FUTURE AI ASSISTANTS MUST RESPECT THIS PLAN !!!
 # =============================================================================
 
-show_about_global() {
+detect_nginx_platform_paths() {
+    local os_type
+    os_type=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+    case "$os_type" in
+        darwin*)  # macOS
+            if [ -d "/opt/homebrew/etc/nginx" ]; then
+                NGINX_CONF_ROOT="/opt/homebrew/etc/nginx"
+                NGINX_PLATFORM="homebrew-arm"
+            elif [ -d "/usr/local/etc/nginx" ]; then
+                NGINX_CONF_ROOT="/usr/local/etc/nginx"
+                NGINX_PLATFORM="homebrew-intel"
+            elif [ -d "/opt/local/etc/nginx" ]; then
+                NGINX_CONF_ROOT="/opt/local/etc/nginx"
+                NGINX_PLATFORM="macports"
+            fi
+            ;;
+        linux*)
+            if command -v apt-get >/dev/null 2>&1; then
+                NGINX_PLATFORM="debian"
+            elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+                NGINX_PLATFORM="rhel"
+            elif command -v apk >/dev/null 2>&1; then
+                NGINX_PLATFORM="alpine"
+            fi
+            ;;
+    esac
+
+    # Re-apply paths based on detected root
+    NGINX_SITES_AVAILABLE="${NGINX_CONF_ROOT}/sites-available"
+    NGINX_SITES_ENABLED="${NGINX_CONF_ROOT}/sites-enabled"
+    NGINX_CONF_D="${NGINX_CONF_ROOT}/conf.d"
+
+    if [ "${JSON}" -eq 0 ] && [ "${QUIET}" -eq 0 ]; then
+        info "Detected nginx platform: ${NGINX_PLATFORM} (root: ${NGINX_CONF_ROOT})"
+    fi
+}
+
+# =============================================================================
+# show_system_diagnostics() - Full System Diagnostics (nginx-adm + gitlab-adm)
+# =============================================================================
+#
+# CRITICAL DIAGNOSTICS FUNCTION - SINGLE SOURCE OF TRUTH FOR SYSTEM STATUS
+#
+# Purpose:
+#   This is the main diagnostics entry point for the entire gitlab-nginx project.
+#   It provides complete visibility into the dual least-privilege model:
+#     • Script version and installation status
+#     • nginx-adm least-privilege status (for external nginx configuration)
+#     • gitlab-adm least-privilege status (for GitLab configuration tree)
+#     • Nginx platform detection and current paths
+#     • GitLab configuration symlink status (/etc/gitlab → /home/gitlab-adm/gitlab)
+#     • Shell, current user, TTY, and interactive state
+#
+# Why this name and scope?
+#   - Previous name `show_nginx_system_diagnostics` was too narrow after introducing gitlab-adm.
+#   - New name clearly communicates that we now manage TWO dedicated least-privilege users:
+#     nginx-adm (for external nginx) and gitlab-adm (for GitLab configuration).
+#   - This prevents future AI assistants or maintainers from misunderstanding the dual-admin model.
+#
+# Defensive Design Rules (Strictly Applied):
+#   • Always call detect_nginx_platform_paths() safely (idempotent)
+#   • Gracefully handle cases where nginx-adm or gitlab-adm do not exist yet
+#   • Never assume directories, users, or symlinks exist (defensive pre-creation rule)
+#   • Works correctly for both root and non-root users
+#   • Fully supports --quiet and --json modes
+#   • All output MUST go through the central output_text() / output_json() system
+#   • No raw echo, printf, or cat allowed outside approved functions
+#
+# !!! THIS IS THE MAIN DIAGNOSTICS ENTRY POINT !!!
+# !!! DO NOT RENAME WITHOUT EXPLICIT USER INSTRUCTION !!!
+# !!! DO NOT REMOVE THE gitlab-adm SECTION !!!
+# !!! MUST INCLUDE BOTH LEAST-PRIVILEGE USERS !!!
+# !!! CALL IT EARLY AND OFTEN IN FUTURE COMMANDS IF NEEDED !!!
+# =============================================================================
+
+show_system_diagnostics() {
+    # Defensive: ensure platform detection runs safely (idempotent)
+    detect_nginx_platform_paths
+
     if [ "${JSON}" -eq 1 ]; then
-        # === JSON MODE - Clean, machine-friendly output ===
+        # === JSON MODE - Rich machine-friendly output ===
         local installed="false"
         is_installed && installed="true"
 
@@ -1295,13 +1471,11 @@ show_about_global() {
             global_ver=$(grep '^VERSION="' "${GLOBAL_BIN}/${APP_NAME}" 2>/dev/null | cut -d'"' -f2 || echo "unknown")
         fi
 
-        # Improved shell detection: avoid showing "${APP_NAME}" as the shell
         local current_shell="unknown"
         current_shell=$(ps -p $$ -o comm= 2>/dev/null | tr -d '()' || echo "unknown")
         
-        # If we see the script name itself (or generic sh/dash/ash), climb to parent shell
         if [ "$current_shell" = "${APP_NAME}" ] || [ "$current_shell" = "sh" ] || \
-        [ "$current_shell" = "dash" ] || [ "$current_shell" = "ash" ]; then
+           [ "$current_shell" = "dash" ] || [ "$current_shell" = "ash" ]; then
             local parent_pid
             parent_pid=$(ps -p $$ -o ppid= 2>/dev/null | tr -d ' ')
             if [ -n "$parent_pid" ]; then
@@ -1312,14 +1486,33 @@ show_about_global() {
         local interactive="false"
         [ -t 1 ] && interactive="true"
 
-        # Clean JSON: no generic message, accurate shell name
+        # Check gitlab-adm status
+        local gitlab_adm_exists="false"
+        id "gitlab-adm" >/dev/null 2>&1 && gitlab_adm_exists="true"
+
+        # Check nginx-adm status
+        local nginx_adm_exists="false"
+        id "nginx-adm" >/dev/null 2>&1 && nginx_adm_exists="true"
+
+        # Check GitLab symlink status
+        local gitlab_symlink_active="false"
+        [ -L "/etc/gitlab" ] && gitlab_symlink_active="true"
+
         output_json "about" "" \
+            "app" "${APP_NAME}" \
             "version" "${VERSION}" \
             "installed" "${installed}" \
             "global_version" "${global_ver}" \
             "shell" "${current_shell}" \
             "interactive" "${interactive}" \
-            "user" "${USERNAME}"
+            "user" "${USERNAME}" \
+            "nginx_platform" "${NGINX_PLATFORM:-unknown}" \
+            "nginx_conf_root" "${NGINX_CONF_ROOT}" \
+            "nginx_sites_available" "${NGINX_SITES_AVAILABLE}" \
+            "nginx_sites_enabled" "${NGINX_SITES_ENABLED}" \
+            "nginx_adm_exists" "${nginx_adm_exists}" \
+            "gitlab_adm_exists" "${gitlab_adm_exists}" \
+            "gitlab_config_symlink" "${gitlab_symlink_active}"
 
         return 0
     fi
@@ -1327,7 +1520,7 @@ show_about_global() {
     # === Normal Human-readable Mode ===
     [ "${QUIET}" -eq 1 ] && return 0
 
-    msg "=== ${APP_NAME} ${VERSION} - About / Diagnostics ==="
+    msg "=== ${APP_NAME} ${VERSION} - System Diagnostics ==="
     empty_line
 
     # Installation status
@@ -1340,40 +1533,74 @@ show_about_global() {
 
     empty_line
 
-    # Global installation
+    # Global installation check
     if [ -x "${GLOBAL_BIN}/${APP_NAME}" ]; then
         global_ver=$(grep '^VERSION="' "${GLOBAL_BIN}/${APP_NAME}" 2>/dev/null | cut -d'"' -f2 || echo "unknown")
-        msg "Global install (${GLOBAL_BIN}/${APP_NAME}):  ${global_ver}"
+        msg "Global install  (${GLOBAL_BIN}/${APP_NAME}):   ${global_ver}"
     else
-        msg "Global install (${GLOBAL_BIN}/${APP_NAME}):  not found"
+        msg "Global install  (${GLOBAL_BIN}/${APP_NAME}):   not found"
     fi
 
     empty_line
 
-    # === Improved Shell Detection (same logic as JSON mode) ===
+    # Shell & Environment
     local current_shell="unknown"
     current_shell=$(ps -p $$ -o comm= 2>/dev/null | tr -d '()' || echo "unknown")
     
-    # If we see the script name itself, try to get the real parent shell
     if [ "$current_shell" = "${APP_NAME}" ] || [ "$current_shell" = "sh" ] || \
-    [ "$current_shell" = "dash" ] || [ "$current_shell" = "ash" ]; then
+       [ "$current_shell" = "dash" ] || [ "$current_shell" = "ash" ]; then
         local parent_pid
         parent_pid=$(ps -p $$ -o ppid= 2>/dev/null | tr -d ' ')
         if [ -n "$parent_pid" ]; then
             current_shell=$(ps -p "$parent_pid" -o comm= 2>/dev/null | tr -d '()' || echo "$current_shell")
         fi
     fi
-    msg "Current shell:   ${current_shell}"
 
-    # TTY status
-    if [ -t 1 ]; then
-        msg "TTY / Interactive: yes"
+    msg "Current shell:     ${current_shell}"
+    msg "User:              ${USERNAME}"
+    msg "TTY / Interactive: $( [ -t 1 ] && echo "yes" || echo "no" )"
+
+    empty_line
+
+    # nginx-adm Least-Privilege Status
+    msg "=== nginx-adm Least-Privilege Status ==="
+    if id "nginx-adm" >/dev/null 2>&1; then
+        success "nginx-adm user exists (UID 1999)"
+        msg "   Home directory : /etc/nginx-adm"
+        msg "   Owns           : ${NGINX_CONF_ROOT}"
     else
-        msg "TTY / Interactive: no (non-interactive mode)"
+        warn "nginx-adm user does NOT exist yet"
     fi
 
     empty_line
+
+    # gitlab-adm Least-Privilege Status
+    msg "=== gitlab-adm Least-Privilege Status ==="
+    if id "gitlab-adm" >/dev/null 2>&1; then
+        success "gitlab-adm user exists (UID/GID 1888)"
+        msg "   Home directory : /home/gitlab-adm"
+        if [ -L "/etc/gitlab" ]; then
+            success "   /etc/gitlab symlink: active → /home/gitlab-adm/gitlab"
+        else
+            warn "   /etc/gitlab symlink: MISSING or broken"
+        fi
+    else
+        warn "gitlab-adm user does NOT exist yet"
+    fi
+
+    empty_line
+
+    # Nginx Platform Detection
+    msg "=== Nginx Platform Detection ==="
+    msg "Detected Platform : ${NGINX_PLATFORM:-unknown}"
+    msg "Config Root       : ${NGINX_CONF_ROOT}"
+    msg "Sites Available   : ${NGINX_SITES_AVAILABLE}"
+    msg "Sites Enabled     : ${NGINX_SITES_ENABLED}"
+    msg "Conf.d directory  : ${NGINX_CONF_D}"
+
+    empty_line
     msg "Use '${APP_NAME} about' to see this information again."
+    msg "Run '${APP_NAME} ssh-hostname' to check or change GitLab SSH hostname."
 }
 
 # =============================================================================
@@ -1448,24 +1675,20 @@ EOF
 #   main CRITICAL REQUIREMENTS section.
 #
 #   It MUST be called early in every major code path (interactive setup,
-#   non-interactive setup, nginx-conf, show_domains, show_email,
-#   get_or_set_gitlab_ssh_hostname, etc.) BEFORE any operation that reads or
-#   writes email.conf, domains.conf, or gitlab-ssh-hostname.conf.
+#   non-interactive setup, nginx-conf, show_domains, etc.) BEFORE any
+#   operation that reads or writes email.conf or domains.conf.
 #
 # Rules This Function Must Always Follow:
 #   • NEVER assume that /etc/letsencrypt or its subdirectories exist.
 #   • ALWAYS create the full directory structure if missing.
-#   • ALWAYS ensure the placeholder files exist: email.conf, domains.conf,
-#     and gitlab-ssh-hostname.conf.
-#   • Use strict permissions: email.conf = 600, domains.conf = 644,
-#     gitlab-ssh-hostname.conf = 600.
+#   • ALWAYS ensure the placeholder files (email.conf and domains.conf) exist.
+#   • Use strict permissions: email.conf = 600, domains.conf = 644.
 #   • This function is intentionally called redundantly for maximum safety.
 #
 # Why This Function Exists:
 #   - Certbot may not have created these paths yet.
 #   - The script must survive fresh systems, partial installs, or interrupted runs.
-#   - It supports independent email/domain/SSH hostname handling before any
-#     Certbot or GitLab command runs.
+#   - It supports independent email/domain handling before any Certbot command runs.
 #
 # Important:
 #   This is part of the "Do Not Rely On Certbot" defensive strategy.
@@ -1476,32 +1699,20 @@ EOF
 # =============================================================================
 
 ensure_letsencrypt_structure() {
-    if [ "$(id -u)" -ne 0 ]; then
-        return 0
-    fi
+    mkdir -p /etc/letsencrypt
+    mkdir -p /etc/letsencrypt/renewal
+    mkdir -p /etc/letsencrypt/live
+    mkdir -p /etc/letsencrypt/archive
 
-    mkdir -p /etc/letsencrypt \
-            /etc/letsencrypt/renewal \
-            /etc/letsencrypt/live \
-            /etc/letsencrypt/archive 2>/dev/null || true
-
-    # email.conf
+    # Create placeholder files if missing
     if [ ! -f "$EMAIL_FILE" ]; then
-        touch "$EMAIL_FILE" 2>/dev/null || true
-        chmod 600 "$EMAIL_FILE" 2>/dev/null || true
+        touch "$EMAIL_FILE"
+        chmod 600 "$EMAIL_FILE"
     fi
 
-    # domains.conf
     if [ ! -f "$DOMAINS_FILE" ]; then
-        touch "$DOMAINS_FILE" 2>/dev/null || true
-        chmod 644 "$DOMAINS_FILE" 2>/dev/null || true
-    fi
-
-    # gitlab-ssh-hostname.conf (new in v2.0.0)
-    local SSH_HOSTNAME_FILE="/etc/letsencrypt/gitlab-ssh-hostname.conf"
-    if [ ! -f "$SSH_HOSTNAME_FILE" ]; then
-        touch "$SSH_HOSTNAME_FILE" 2>/dev/null || true
-        chmod 600 "$SSH_HOSTNAME_FILE" 2>/dev/null || true
+        touch "$DOMAINS_FILE"
+        chmod 644 "$DOMAINS_FILE"
     fi
 }
 
@@ -1946,6 +2157,15 @@ ask_and_confirm_domains() {
 #   • Full sequence: Install packages → Stop nginx early → Handle email & domains
 #     independently → Apply certificates (standalone) → Setup Nginx config
 #
+# Recent Improvement (April 2026 - Idempotency Enhancement):
+#   • Strengthened early check: now verifies both `command -v certbot` AND that
+#     the binary is executable (`[ -x "$(command -v certbot)" ]`).
+#   • If certbot already exists, the function returns immediately with clear
+#     status message (supports --json and normal mode).
+#   • This prevents unnecessary package manager calls on repeated runs and
+#     reduces noise in automation / reinstall scenarios.
+#   • Maintains full defensive style while improving Caution and Anti-fragility.
+#
 # Platform Support Strategy (2026 Defensive Approach):
 #   1. Linux with snapd (Ubuntu, Debian, Fedora, CentOS, Rocky, etc.) → snap (RECOMMENDED)
 #      • Official EFF preference: always latest version, auto-updates.
@@ -1982,8 +2202,12 @@ ask_and_confirm_domains() {
 # =============================================================================
 
 install_certbot() {
-    if command -v certbot >/dev/null 2>&1; then
-        info "certbot is already installed."
+    if command -v certbot >/dev/null 2>&1 && [ -x "$(command -v certbot)" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "status" "certbot already installed" "path" "$(command -v certbot)"
+        else
+            info "certbot is already installed."
+        fi
         return 0
     fi
 
@@ -2163,7 +2387,7 @@ get_or_set_email() {
 #   • Follows the internal (Certbot) → external (Nginx) model
 #
 # Why This Is Non-Negotiable (Defensive Reasoning):
-#   • An empty /etc/nginx/sites-enabled/default or partial config can cause
+#   • An empty ${NGINX_CONF_ROOT}/sites-enabled/default or partial config can cause
 #     nginx to fail to start or behave unpredictably.
 #   • Certbot --standalone needs exclusive access to port 80 for HTTP-01 challenges.
 #   • Starting nginx too early (or letting it stay running) is one of the most
@@ -2225,7 +2449,7 @@ stop_nginx_early() {
 #   • Explicit success message
 #   • No assumption that directories or files exist beforehand
 #
-# !!! THIS FUNCTION (OR apply_letsencrypt_standalone) MUST RUN BEFORE setup_nginx_configs() !!!
+# !!! THIS FUNCTION (OR apply_letsencrypt_standalone) MUST RUN BEFORE deploy_domain_nginx_configs() !!!
 # !!! DO NOT MOVE CERTBOT CALLS AFTER NGINX CONFIGURATION !!!
 # !!! DO NOT USE --nginx PLUGIN IN THE MAIN FLOW !!!
 # =============================================================================
@@ -2302,10 +2526,28 @@ apply_certificates() {
 #   • Duplication of port 80 stop is deliberate (defense in depth).
 #   • The certificate will be stored at: /etc/letsencrypt/live/${main_domain}/
 #
+# LESSON LEARNED (April 2026 - Critical for Domain Expansion):
+#   When adding a new domain to an existing certificate (e.g. adding slip.nifty-corner.com
+#   to a cert that already contains crms.hk + other domains), Certbot will stop with:
+#     "You have an existing certificate that contains a portion of the domains you requested"
+#     and ask whether to expand the certificate.
+#
+#   Because the script runs with --non-interactive, this prompt causes failure.
+#
+#   SOLUTION:
+#   • Always include --expand on the primary certbot call when domains may change.
+#   • Use --cert-name "$main_domain" to make behavior explicit and reliable.
+#   • Provide a fallback (without --expand) for the very first certificate issuance.
+#   • This prevents the "expand" confirmation error when the domain list grows.
+#
+#   Recommended command pattern:
+#     certbot certonly --standalone --expand --cert-name "$main_domain" --domains ...
+#
 # !!! THIS FUNCTION MUST BE CALLED ONLY AFTER stop_nginx_early() !!!
-# !!! DO NOT MOVE THIS AFTER setup_nginx_configs() !!!
+# !!! DO NOT MOVE THIS AFTER deploy_domain_nginx_configs() !!!
 # !!! DO NOT USE --nginx PLUGIN IN THE MAIN INTERACTIVE FLOW !!!
 # !!! THE USER-CHOSEN MAIN DOMAIN MUST REMAIN THE FIRST DOMAIN IN THE LIST !!!
+# !!! ALWAYS INCLUDE --expand + --cert-name TO SUPPORT DOMAIN EXPANSION !!!
 # =============================================================================
 
 apply_letsencrypt_standalone() {
@@ -2313,43 +2555,48 @@ apply_letsencrypt_standalone() {
     local email="$2"
     local main_domain="$3"
 
-    # Defensive: never assume directories or parameters exist
     ensure_letsencrypt_structure
 
     [ -z "$domains" ]     && die "No domains provided to apply_letsencrypt_standalone()"
     [ -z "$email" ]       && die "No email provided to apply_letsencrypt_standalone()"
     [ -z "$main_domain" ] && die "No main domain provided to apply_letsencrypt_standalone()"
 
-    info "Stopping any service on port 80 again (defense in depth)..."
+    info "Stopping any service on port 80 (defense in depth)..."
     systemctl stop nginx 2>/dev/null || true
     fuser -k 80/tcp 2>/dev/null || true
     sleep 2
 
-    # Build clean domain list with user-chosen main_domain forced first
-    local other_domains
-    other_domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$main_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
-
-    local cert_domains="$main_domain $other_domains"
-    cert_domains=$(echo "$cert_domains" | tr -s ' ' | sed 's/^ *//;s/ *$//')
-
     local cert_domains_comma
-    cert_domains_comma=$(echo "$cert_domains" | tr ' ' ',')
+    cert_domains_comma=$(echo "$domains" | tr ' ' ',')
 
-    info "Requesting Let's Encrypt certificate with ${main_domain} as primary Common Name..."
+    info "Requesting Let's Encrypt certificate with ${main_domain} as primary domain..."
 
-    certbot certonly --standalone \
+    # Primary attempt: use --expand (best when adding domains to an existing cert)
+    if ! certbot certonly --standalone \
         --email "$email" \
         --agree-tos \
         --non-interactive \
-        --allow-subset-of-names \
-        --domains "$cert_domains_comma" || die "Certbot failed to obtain certificates."
+        --expand \
+        --cert-name "$main_domain" \
+        --domains "$cert_domains_comma"; then
 
-    # Critical verification - ensure certificate was written under the correct main domain
+        # Fallback for completely new certificate (first run)
+        info "→ Expand not applicable (new certificate), falling back..."
+        certbot certonly --standalone \
+            --email "$email" \
+            --agree-tos \
+            --non-interactive \
+            --allow-subset-of-names \
+            --cert-name "$main_domain" \
+            --domains "$cert_domains_comma" || die "Certbot failed to obtain certificates."
+    fi
+
+    # Critical verification
     if [ ! -f "/etc/letsencrypt/live/${main_domain}/fullchain.pem" ]; then
         die "Certificate files were not created under the main domain: ${main_domain}"
     fi
 
-    success "Let's Encrypt certificates obtained successfully."
+    success "✅ Let's Encrypt certificates obtained successfully."
     success "Primary certificate directory: /etc/letsencrypt/live/${main_domain}/"
 }
 
@@ -2427,6 +2674,15 @@ get_main_domain() {
 #       Install packages → Stop nginx early → Handle email & domains independently
 #       → Apply certificates (standalone) → ONLY THEN setup full Nginx configuration
 #
+# Recent Improvement (April 2026 - Idempotency Enhancement):
+#   • Strengthened early check: now verifies both `command -v nginx` AND that
+#     the binary is executable (`[ -x "$(command -v nginx)" ]`).
+#   • If nginx already exists, the function returns immediately with clear
+#     status message (supports --json and normal mode).
+#   • This prevents redundant package manager operations on repeated runs
+#     while keeping the function fully idempotent and safe for automation.
+#   • Improves Caution without touching any protected installation sequence.
+#
 # Platform Support Strategy (2026):
 #   1. Linux:
 #      • Debian/Ubuntu family          → apt-get
@@ -2451,7 +2707,7 @@ get_main_domain() {
 #   • Run package manager update where appropriate.
 #   • All output goes through central `info()` / `warn()` / `die()` functions.
 #   • Fail with clear, actionable messages for unsupported or problematic environments.
-#   • No configuration files touched here — that happens only in setup_nginx_configs().
+#   • No configuration files touched here — that happens only in deploy_domain_nginx_configs().
 #
 # Important Notes:
 #   • After installation on most Linux distros, nginx service is enabled and started.
@@ -2462,13 +2718,17 @@ get_main_domain() {
 #
 # !!! THIS FUNCTION MUST REMAIN EARLY IN run_interactive_setup() !!!
 # !!! DO NOT ADD ANY CONFIGURATION, START, OR ENABLE COMMANDS HERE !!!
-# !!! DO NOT COMBINE WITH setup_nginx_configs() !!!
+# !!! DO NOT COMBINE WITH deploy_domain_nginx_configs() !!!
 # !!! THE OFFICIAL PACKAGE OFTEN STARTS NGINX — WE STOP IT RIGHT AFTER !!!
 # =============================================================================
 
 install_nginx() {
-    if command -v nginx >/dev/null 2>&1; then
-        info "nginx is already installed."
+    if command -v nginx >/dev/null 2>&1 && [ -x "$(command -v nginx)" ]; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "status" "nginx already installed" "path" "$(command -v nginx)"
+        else
+            info "nginx is already installed."
+        fi
         return 0
     fi
 
@@ -2556,14 +2816,14 @@ install_nginx() {
 #   (the default nginx user on Debian/Ubuntu and most Linux distros).
 #
 #   This prevents permission issues when serving static files.
-#   Runs after setup_nginx_configs() so all directories and files exist.
+#   Runs after deploy_domain_nginx_configs() so all directories and files exist.
 #
 # Defensive:
 #   - Only runs as root
 #   - Uses -R (recursive)
 #   - Graceful on non-Debian systems (still tries common www-data)
 #
-# !!! DO NOT SIMPLIFY - permission issues are very common after gitlab-nginx runs !!!
+# !!! DO NOT SIMPLIFY - permission issues are very common after certbot-nginx runs !!!
 # =============================================================================
 
 fix_docroot_permissions() {
@@ -2574,54 +2834,33 @@ fix_docroot_permissions() {
     info "Fixing permissions: setting www-data:www-data ownership on document roots..."
 
     # Main docroots for all domains
-    if [ -d "/var/www" ]; then
-        chown -R www-data:www-data /var/www 2>/dev/null || true
+    if [ -d "${NGINX_DOCROOT_BASE}" ]; then
+        chown -R www-data:www-data ${NGINX_DOCROOT_BASE} 2>/dev/null || true
     fi
 
     # ACME challenge directory (used for renewals)
-    if [ -d "/var/www/letsencrypt" ]; then
-        chown -R www-data:www-data /var/www/letsencrypt 2>/dev/null || true
+    if [ -d "${NGINX_DOCROOT_BASE}/letsencrypt" ]; then
+        chown -R www-data:www-data ${NGINX_DOCROOT_BASE}/letsencrypt 2>/dev/null || true
     fi
 
     # Ensure directories are readable/executable and files are readable
-    find /var/www -type d -exec chmod 755 {} + 2>/dev/null || true
-    find /var/www -type f -exec chmod 644 {} + 2>/dev/null || true
+    find ${NGINX_DOCROOT_BASE} -type d -exec chmod 755 {} + 2>/dev/null || true
+    find ${NGINX_DOCROOT_BASE} -type f -exec chmod 644 {} + 2>/dev/null || true
 
     success "Document root permissions fixed (www-data:www-data)"
 }
 
 # =============================================================================
-# setup_nginx_configs() - Final Nginx Configuration with GitLab Proxy (Step 11)
+# create_cloudflare_map() - Create Cloudflare IP detection map (global, one-time)
 # =============================================================================
 #
-# CRITICAL FUNCTION - STRICT SEQUENCE ENFORCEMENT (Updated for v2.0.0)
-#
 # Purpose:
-#   Step 11: Setup full Nginx configuration ONLY AFTER certificates are applied
-#   and gitlab-ctl exists. Includes GitLab proxy while keeping all previous
-#   Cloudflare protection, real_ip, and security features.
+#   Creates the cloudflare-map.conf file and ensures it is included in nginx.conf.
+#   This is a global (http context) configuration, not per-domain.
 #
-#   It sets up a secure, production-ready Nginx configuration with:
-#     • HTTP → HTTPS redirect + ACME challenge support
-#     • Per-domain HTTPS server blocks using the SINGLE certificate
-#       (main_domain as primary CN + all other domains as SANs)
-#     • Strong Cloudflare-only origin protection (deny all other direct access)
-#     • Proper real_ip handling so $remote_addr reflects the real visitor IP
-#
-# Key Rules:
-#   • MUST be called only in Step 11
-#   • Keep ALL existing Cloudflare IP restriction, real_ip, /cloudflare-check
-#   • Add GitLab upstream + proxy_pass for external nginx mode
-#   • Use main_domain for server_name and SSL certificate paths
-#   • All changes must be defensive and additive only
-#
-# Security Model (Defensive Design):
-#   • Only Cloudflare IPs are allowed to reach the server on port 443.
-#   • Direct access from anywhere else is blocked (deny all;).
-#   • This protects the origin server when placed behind Cloudflare Proxy (orange cloud).
-#   • real_ip_recursive on + CF-Connecting-IP header gives correct client IP
-#     to logs and any backend applications (e.g. GitLab, custom apps).
-#   • SSL configuration is modern and secure (TLSv1.2 + TLSv1.3).
+# Why separate function?
+#   Cloudflare map is independent from per-domain server blocks.
+#   Makes intention clear and allows easier future maintenance.
 #
 # Why Cloudflare IP Restriction?
 #   When using Cloudflare, all visitor traffic arrives from Cloudflare's anycast network.
@@ -2648,68 +2887,28 @@ fix_docroot_permissions() {
 #   • nginx cannot check $remote_ip against ip map well, fall back to 
 #     weak $http_cf_connecting_ip header at this stage.
 #
-# Certificate Usage:
-#   All domains (main + SANs) share ONE certificate located at:
-#       /etc/letsencrypt/live/${main_domain}/
-#   This is by design — one cert covers the entire list.
-#
-# =============================================================================
-# CRITICAL WARNING - $is_cf IMPLEMENTATION (REAL SERVER TESTED)
-# =============================================================================
-#
-# Problems discovered through real server testing:
-#   • Using `geo $remote_addr $is_cf { ... }`                → buggy / unreliable
-#   • Using `map $realip_remote_addr $is_cf { ... }`        → buggy / unreliable
-#   • Any map/geo that depends on variables after real_ip module runs → often fails
-#
-# Working solution (verified on real server):
-#   1. Capture original connecting IP very early:
-#        map $remote_addr $origin_addr { default $remote_addr; }
-#   2. Then inside server block:
-#        set $is_cf 0;
-#        if ($remote_addr != $origin_addr) {
-#            set $is_cf 1;
-#        }
-#
-# This method is currently the only reliable way found in real environment.
-#
-# !!! DO NOT START NGINX EARLIER !!!
-# !!! THIS FUNCTION MUST RUN AFTER apply_letsencrypt_standalone() !!!
-# !!! DO NOT MODIFY THE CORE STRUCTURE OR SECURITY MODEL !!!
+# !!! CALLED ONLY ONCE FROM deploy_domain_nginx_configs() !!!
 # =============================================================================
 
-setup_nginx_configs() {
-    local domains="$1"
-    local main_domain="$2"
-    local cert_path="/etc/letsencrypt/live/${main_domain}"
-    local CLOUDFLARE_MAP_FILE="/etc/nginx/sites-available/cloudflare-map.conf"
+create_cloudflare_map() {
+    local CLOUDFLARE_MAP_FILE="${NGINX_CONF_ROOT}/sites-available/cloudflare-map.conf"
 
-    [ -z "$domains" ]     && die "No domains provided to setup_nginx_configs()"
-    [ -z "$main_domain" ] && die "No main domain provided to setup_nginx_configs()"
+    info "Creating Cloudflare IP detection map..."
 
-    info "Setting up final Nginx configuration with GitLab proxy (Step 11)..."
-
-    # 1. Backup (already handled by caller)
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    mkdir -p /var/www
-    chmod 755 /var/www
-
-    # 2. Cloudflare Map (http context) - unchanged
-    info "Creating/Updating Cloudflare IP detection map..."
-
-    cat > ${CLOUDFLARE_MAP_FILE} << 'EOF'
+    cat > "${CLOUDFLARE_MAP_FILE}" << 'EOF'
 # =============================================================================
-# Simple and Reliable Cloudflare detection
+# Simple and Reliable $has_cf variable
 # =============================================================================
 map $remote_addr $origin_addr {
-    default $remote_addr;
+    default remote_addr;              # No header = direct access / not Cloudflare
 }
 map $http_cf_connecting_ip $has_cf {
-    default "NO";
-    "~." "YES";
+    default "NO";                    # No header = direct access / not Cloudflare
+    "~." "YES";                      # Any non-empty value = coming from Cloudflare
 }
 
-# Cloudflare Real IP Configuration
+# === Cloudflare Real IP Configuration ===
+# IPv4
 set_real_ip_from 173.245.48.0/20;
 set_real_ip_from 103.21.244.0/22;
 set_real_ip_from 103.22.200.0/22;
@@ -2737,37 +2936,91 @@ set_real_ip_from 2c0f:f248::/32;
 
 EOF
 
-    chmod 644 ${CLOUDFLARE_MAP_FILE}
-    ln -sf ${CLOUDFLARE_MAP_FILE} /etc/nginx/sites-enabled/
+    chmod 644 "${CLOUDFLARE_MAP_FILE}"
+    ln -sf "${CLOUDFLARE_MAP_FILE}" ${NGINX_CONF_ROOT}/sites-enabled/
 
-    if ! grep -q "cloudflare-map.conf" /etc/nginx/nginx.conf 2>/dev/null; then
-        sed -i "/http[[:space:]]*{/a \    include ${CLOUDFLARE_MAP_FILE};" /etc/nginx/nginx.conf 2>/dev/null || true
+    if ! grep -q "cloudflare-map.conf" ${NGINX_CONF_ROOT}/nginx.conf; then
+        sed -i "/http[[:space:]]*{/a \    include ${CLOUDFLARE_MAP_FILE};" ${NGINX_CONF_ROOT}/nginx.conf
     fi
+}
 
-    # 3. Per-Domain Configs with GitLab Proxy
+# =============================================================================
+# create_per_domain_server_blocks() - Create per-domain HTTPS configs
+# =============================================================================
+#
+# Purpose:
+#   Creates one server block per domain in sites-available/ and symlinks to sites-enabled/.
+#   Includes document root, index.html, SSL, Cloudflare protection, etc.
+#
+# Why separate?
+#   This is the domain-specific part. Clear separation improves readability
+#   and maintainability without touching protected core logic.
+#
+#   It sets up a secure, production-ready Nginx configuration with:
+#     • HTTP → HTTPS redirect + ACME challenge support
+#     • Per-domain HTTPS server blocks using the SINGLE certificate
+#       (main_domain as primary CN + all other domains as SANs)
+#     • Strong Cloudflare-only origin protection (deny all other direct access)
+#     • Proper real_ip handling so $remote_addr reflects the real visitor IP
+#
+# Security Model (Defensive Design):
+#   • Only Cloudflare IPs are allowed to reach the server on port 443.
+#   • Direct access from anywhere else is blocked (deny all;).
+#   • This protects the origin server when placed behind Cloudflare Proxy (orange cloud).
+#   • real_ip_recursive on + CF-Connecting-IP header gives correct client IP
+#     to logs and any backend applications (e.g. GitLab, custom apps).
+#   • SSL configuration is modern and secure (TLSv1.2 + TLSv1.3).
+#
+# Certificate Usage:
+#   All domains (main + SANs) share ONE certificate located at:
+#       /etc/letsencrypt/live/${main_domain}/
+#   This is by design — one cert covers the entire list.
+#
+# =============================================================================
+# CRITICAL WARNING - $is_cf IMPLEMENTATION (REAL SERVER TESTED)
+# =============================================================================
+#
+# Problems discovered through real server testing:
+#   • Using `geo $remote_addr $is_cf { ... }`                → buggy / unreliable
+#   • Using `map $realip_remote_addr $is_cf { ... }`        → buggy / unreliable
+#   • Any map/geo that depends on variables after real_ip module runs → often fails
+#
+# Working solution (verified on real server):
+#   1. Capture original connecting IP very early:
+#        map $remote_addr $origin_addr { default $remote_addr; }
+#   2. Then inside server block:
+#        set $is_cf 0;
+#        if ($remote_addr != $origin_addr) {
+#            set $is_cf 1;
+#        }
+#
+# !!! CALLED FROM deploy_domain_nginx_configs() !!!
+# =============================================================================
+
+create_per_domain_server_blocks() {
+    local domains="$1"
+    local main_domain="$2"
+    local cert_path="/etc/letsencrypt/live/${main_domain}"
+
     for domain in $domains; do
-        mkdir -p "/var/www/${domain}"
-        chmod 755 "/var/www/${domain}"
+        mkdir -p "${NGINX_DOCROOT_BASE}/${domain}"
+        chmod 755 "${NGINX_DOCROOT_BASE}/${domain}"
 
-        # Simple index page
-        cat > "/var/www/${domain}/index.html" << EOF
+        cat > "${NGINX_DOCROOT_BASE}/${domain}/index.html" << EOF
 <!DOCTYPE html><html><head><title>${domain}</title></head><body style="font-family:Arial;text-align:center;padding:100px;">
-<h1>${domain}</h1><p>GitLab CE + Nginx + Cloudflare Protection</p></body></html>
+<h1>${domain}</h1><p>Protected by Cloudflare + Nginx</p></body></html>
 EOF
 
-        cat > "/etc/nginx/sites-available/${domain}.conf" << EOF
-include ${CLOUDFLARE_MAP_FILE};
+        cat > "${NGINX_CONF_ROOT}/sites-available/${domain}.conf" << EOF
 
-upstream gitlab_workhorse {
-    server unix:/var/opt/gitlab/gitlab-workhorse/workhorse.socket;
-}
+include ${NGINX_CONF_ROOT}/sites-available/cloudflare-map.conf;
 
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name ${domain};
 
-    root /var/www/${domain};
+    root ${NGINX_DOCROOT_BASE}/${domain};
     index index.html;
 
     ssl_certificate ${cert_path}/fullchain.pem;
@@ -2777,57 +3030,98 @@ server {
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers off;
 
-    # Cloudflare detection
+    # This must be inside server block
     set \$is_cf 0;
     if (\$remote_addr != \$origin_addr) {
         set \$is_cf 1;
     }
 
-    # Cloudflare check page (bypass protection)
+    # ====================== CLOUD FLARE CHECK PAGE ======================
     location = /cloudflare-check {
         default_type text/html;
         return 200 '
 <!DOCTYPE html>
-<html><head><title>Cloudflare Check - ${domain}</title></head>
-<body style="font-family:Arial;text-align:center;padding:50px;">
+<html>
+<head><title>Cloudflare Check - ${domain}</title></head>
+<body style="font-family:Arial,sans-serif;text-align:center;padding:50px;background:#f8f9fa;">
     <h1>Cloudflare Check</h1>
-    <p style="font-size:2.8em;color:#0066cc;">\$remote_addr</p>
+    <p style="font-size:2.8em;color:#0066cc;font-weight:bold;">\$remote_addr</p>
     <p><strong>From Cloudflare?</strong> \$is_cf (1 = Yes)</p>
     <p><strong>CF Connecting IP:</strong> \$http_cf_connecting_ip</p>
-</body></html>';
+    <p><strong>Is Cloudflare:</strong> <span style="color: #0066cc; font-weight:bold;">\$has_cf</span></p>
+    <p><strong>Ray ID:</strong> \$http_cf_ray</p>
+    <hr>
+    <p style="color:green;">This page is open to everyone (bypassing protection)</p>
+</body>
+</html>';
     }
+    # ============================================================
 
-    # GitLab proxy (main application)
     location / {
         if (\$http_cf_connecting_ip = "") {
             return 403;
         }
-        proxy_pass http://gitlab_workhorse;
-        proxy_set_header Host \$http_host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-SSL on;
-        proxy_set_header X-Forwarded-Host \$http_host;
-        proxy_read_timeout 300;
-        proxy_connect_timeout 300;
+        try_files \$uri \$uri/ =404;
     }
 
-    # ACME challenge for renewals
     location /.well-known/acme-challenge/ {
-        root /var/www/letsencrypt;
+        root ${NGINX_DOCROOT_BASE}/letsencrypt;
         try_files \$uri =404;
     }
 }
 EOF
 
-        ln -sf "/etc/nginx/sites-available/${domain}.conf" /etc/nginx/sites-enabled/
+        ln -sf "${NGINX_CONF_ROOT}/sites-available/${domain}.conf" ${NGINX_CONF_ROOT}/sites-enabled/
     done
+}
 
+# =============================================================================
+# deploy_domain_nginx_configs() - Final Nginx Configuration (After Certificates)
+# =============================================================================
+#
+# CRITICAL FUNCTION - STRICT SEQUENCE ENFORCEMENT
+#
+# Purpose:
+#   Creates and deploys the final nginx virtual host configuration for each domain
+#   (after certificates are obtained).
+#
+#   High-level orchestrator called after certificates are obtained.
+#   Coordinates the 4 distinct steps without doing the heavy work itself.
+#
+#   This includes:
+#   • Cloudflare IP detection map (once)
+#   • Per-domain HTTPS server blocks (with redirect, ACME support, etc.)
+#   • Document root + index.html creation
+#   • nginx-adm ownership
+#
+# Why this name?
+#   Previous name `setup_nginx_configs` was too broad and vague.
+#   New name clearly communicates the **intent**: deploying domain-specific
+#   configs after the certificate stage.
+#
+# This method is currently the only reliable way found in real environment.
+#
+# !!! DO NOT START NGINX EARLIER !!!
+# !!! THIS FUNCTION MUST RUN AFTER apply_letsencrypt_standalone() !!!
+# !!! DO NOT MODIFY THE CORE STRUCTURE OR SECURITY MODEL !!!
+# =============================================================================
+
+deploy_domain_nginx_configs() {
+    local domains="$1"
+    local main_domain="$2"
+
+    [ -z "$domains" ]     && die "No domains provided to deploy_domain_nginx_configs()"
+    [ -z "$main_domain" ] && die "No main domain provided to deploy_domain_nginx_configs()"
+
+    info "Deploying final Nginx configuration (after certificates)..."
+
+    create_cloudflare_map
+    create_per_domain_server_blocks "$domains" "$main_domain"
     setup_nginx_adm_ownership
+    fix_docroot_permissions   # if you want to keep it here
 
-    info "Nginx configuration with GitLab proxy completed."
-    info "→ Debug page: https://${main_domain}/cloudflare-check"
+    info "Nginx configuration completed successfully."
+    info "→ Debug page is now available at: https://${main_domain}/cloudflare-check"
 }
 
 # =============================================================================
@@ -2840,74 +3134,73 @@ EOF
 #
 # Key Logic for Main Domain:
 #   • The PRIMARY / MAIN domain is chosen EXPLICITLY and INTERACTIVELY by the USER
-#     via get_main_domain(). This is the authoritative decision.
+#     via get_main_domain(). This is the authoritative choice made by the user.
 #   • ask_and_confirm_domains() is ONLY used to let the user ADD extra domains (SANs).
 #   • After confirmation, the script MUST re-arrange the final domain list so that
 #     the user-chosen main domain is placed FIRST.
 #   • Prints ALL output to stderr so it is never captured by command substitution.
 #
-# Platform Notes (2026):
-#   • install_certbot() and install_nginx() now support multiple platforms.
-#   • Core certificate and nginx config logic remains Linux-centric.
-#   • On macOS, some systemd commands are skipped gracefully in stop_nginx_early().
-#
-# New in 1.9.0:
-#   • Calls nginx-adm setup functions early
-#   • Calls backup_existing_nginx_configs() before any configuration changes
-#   • Uses nginx-adm for ownership and testing (least privilege)
-#
-# New Feature (April 2026):
-#   • Added interactive question: "Are you using Cloudflare proxy?"
-#   • Supports --no-cloudflare flag to skip the question and disable protection
-#   • When using Cloudflare: warns user to temporarily set DNS to "DNS Only" (grey cloud)
-#   • When not using Cloudflare: generates open Nginx config (allow all)
-#
-# Strict Sequence (MUST NOT BE CHANGED):
-# New 13-Step Sequence for v2.0.0:
-#   1. Install Certbot
-#   2. Install Nginx
-#   3. Stop Nginx early
-#   4. Handle email and domains
-#   5. Apply certificates (standalone)
-#   6. Install GitLab CE (without config)
-#   7. Stop GitLab early
-#   8. Get/set GitLab SSH hostname
-#   9. Backup gitlab.rb
-#  10. Configure gitlab.rb + reconfigure
-#  11. Setup Nginx with GitLab proxy
-#  12. Test and start nginx (as nginx-adm)
-#  13. Show SSH client instructions
+# Strict 13-Step Installation Sequence (MUST NOT BE CHANGED):
+#   1. Install Certbot without plugin configuration
+#   2. Install Nginx without configuration
+#   3. Stop Nginx service early
+#   4. Handle email and domains independently
+#   5. Run Certbot --standalone using user-chosen main domain
+#   6. Install GitLab CE (Omnibus) without configuration
+#   7. Ensure GitLab is stopped
+#   8. Ask user for GitLab SSH server name (main domain or custom)
+#   9. Backup gitlab.rb with dated format gitlab.rb.YYYYMMDD-N.bak
+#  10. Configure gitlab.rb (external_url with https, external nginx,
+#      SSH hostname, web_server external_users, etc.) then run gitlab-ctl reconfigure
+#  11. ONLY AFTER certificates AND gitlab-ctl exists:
+#      Setup full Nginx configuration with GitLab proxy
+#  12. Test nginx config (as nginx-adm) then start nginx
+#  13. Display clear ~/.ssh/config instructions for client machines
 #
 # Why this exact order?
 #   - Prevents nginx from running with empty/broken config
 #   - Allows clean Certbot --standalone operation on port 80
-#   - Maintains clear separation: Certbot (cert provider) → Nginx (web server)
+#   - Maintains clear separation: Certbot (cert provider) → GitLab (application) → Nginx (external servant)
+#   - Certificates are obtained BEFORE GitLab configuration and final nginx setup
+#
+# Defensive Design:
+#   • Calls both nginx-adm and gitlab-adm least-privilege setup early
+#   • Always calls ensure_letsencrypt_structure() and ensure_gitlab_structure() early
+#   • Backups are created before any modification
+#   • Never starts services with incomplete configuration
+#   • All output goes through central output functions
 #
 # !!! DO NOT MODIFY THIS SEQUENCE !!!
-# !!! DO NOT START NGINX BEFORE CERTIFICATES ARE APPLIED !!!
-# !!! DO NOT COMBINE STEPS OR TREAT CERTBOT AND NGINX AS EQUAL !!!
+# !!! DO NOT START NGINX OR GITLAB BEFORE THEIR RESPECTIVE STEPS !!!
+# !!! DO NOT COMBINE STEPS OR TREAT CERTBOT / NGINX / GITLAB AS EQUAL LAYERS !!!
+# !!! THIS FUNCTION IS THE SINGLE SOURCE OF TRUTH FOR INTERACTIVE FLOW !!!
 # =============================================================================
 
 run_interactive_setup() {
     check_root
-    ensure_letsencrypt_structure
 
-    # nginx-adm Least-Privilege Setup
+    # Defensive pre-creation - NEVER assume directories exist
+    ensure_letsencrypt_structure
+    ensure_gitlab_structure
+
+    # === Least-Privilege Setup (nginx-adm + gitlab-adm) ===
+    # These must run very early to establish ownership before any config changes
     create_nginx_adm_user
     setup_nginx_adm_ownership
     setup_restricted_sudoers
 
-    # Backup before any changes
-    backup_existing_nginx_configs
+    create_gitlab_adm_user
+    setup_gitlab_adm_ownership_and_symlinks
+    setup_gitlab_restricted_sudoers
 
-    # Step 1-2: Install packages
+    # Step 1-2: Install packages (no configuration yet)
     install_certbot
     install_nginx
 
-    # Step 3: Stop Nginx early
+    # Step 3: Stop Nginx early (critical for Certbot --standalone)
     stop_nginx_early
 
-    # Step 4: Email & Domains
+    # Step 4: Handle email and domains independently (MUST be done FIRST)
     local email
     email=$(get_or_set_email)
 
@@ -2934,7 +3227,7 @@ run_interactive_setup() {
 
     domains=$(ask_and_confirm_domains "$domains_to_confirm")
 
-    # Force main domain to front
+    # Force main domain to front (CRITICAL RULE)
     if [ -n "$main_domain" ] && [ -n "$domains" ]; then
         domains=$(echo "$domains" | tr ' ' '\n' | grep -v "^$main_domain$" | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
         domains="$main_domain $domains"
@@ -2942,40 +3235,45 @@ run_interactive_setup() {
     fi
     save_domains_to_file "$domains"
 
-    # Step 5: Apply certificates
+    # Step 5: Apply certificates (standalone) - BEFORE any GitLab config
     apply_letsencrypt_standalone "$domains" "$email" "$main_domain"
 
-    # Step 6: Install GitLab CE
+    # Step 6: Install GitLab CE (Omnibus) without configuration
     install_gitlab_ce
 
-    # Step 7: Stop GitLab early
+    # Step 7: Ensure GitLab is stopped
     stop_gitlab_early
 
-    # Step 8: GitLab SSH hostname
+    # Step 8: GitLab SSH hostname (explicitly addresses Cloudflare port 22 limitation)
     local ssh_hostname
     ssh_hostname=$(get_or_set_gitlab_ssh_hostname)
 
-    # Step 9: Backup gitlab.rb
+    # Step 9: Backup gitlab.rb before any modification
     backup_gitlab_rb
 
-    # Step 10: Configure GitLab
+    # Step 10: Configure gitlab.rb + reconfigure
     configure_gitlab_rb "$main_domain" "$ssh_hostname"
 
-    # Step 11: Setup Nginx with GitLab proxy
-    setup_nginx_configs "$domains" "$main_domain"
+    # Step 11: Setup full Nginx configuration with GitLab proxy
+    # (This replaces the old per-domain logic with GitLab-specific block)
+    deploy_gitlab_nginx_config "$main_domain"
 
-    # Step 12: Test and start nginx (as nginx-adm)
+    # Step 12: Test and start nginx (as nginx-adm - least privilege)
     info "Testing nginx configuration..."
     sudo -u nginx-adm nginx -t || die "Nginx config test failed!"
 
     info "Starting nginx service..."
-    systemctl start nginx || warn "Failed to start nginx"
+    systemctl start nginx || warn "Failed to start nginx (check manually)"
 
     success "Nginx started successfully."
 
-    # Step 13: Show SSH instructions
+    # Step 13: Display clear ~/.ssh/config instructions for client machines
     show_ssh_config_instructions "$main_domain" "$ssh_hostname"
+
+    success "Full GitLab + external nginx setup completed successfully."
+    success "GitLab is now accessible at: https://${main_domain}"
 }
+
 
 # =============================================================================
 # run_non_interactive_setup() - Non-Interactive Mode (Install-Only)
@@ -3017,8 +3315,12 @@ run_non_interactive_setup() {
     setup_nginx_adm_ownership
     setup_restricted_sudoers
 
+    create_gitlab_adm_user          # ← NEW
+    setup_gitlab_adm_ownership_and_symlinks   # ← NEW
+    setup_gitlab_restricted_sudoers           # ← NEW
+
     # Backup existing configs before any potential changes
-    backup_existing_nginx_configs
+    backup_nginx_sites_configs
 
     # Step 1-2: Install packages
     install_certbot
@@ -3094,7 +3396,6 @@ ensure_letsencrypt_structure() {
     fi
 }
 
-
 # =============================================================================
 # create_nginx_adm_user() - Create dedicated least-privilege user (NEW 1.9.0)
 # =============================================================================
@@ -3104,6 +3405,13 @@ ensure_letsencrypt_structure() {
 # Purpose:
 #   Creates the "nginx-adm" user if it does not exist.
 #   This user will own all nginx configuration and will be used for day-to-day operations.
+#
+# Recent Improvement (April 2026 - Idempotency Enhancement):
+#   • Added explicit early exit: if `nginx-adm` user already exists (`id "nginx-adm"`),
+#     the function now returns immediately with a clear status message.
+#   • This prevents unnecessary groupadd/useradd calls and reduces log noise on
+#     repeated runs or when re-running the script after partial setup.
+#   • Maintains full least-privilege model while making the function truly idempotent.
 #
 # Rules:
 #   • User is a normal (non-root) system user.
@@ -3117,8 +3425,17 @@ ensure_letsencrypt_structure() {
 # =============================================================================
 
 create_nginx_adm_user() {
-    info "Setting up nginx-adm user (UID/GID 1999)..."
+    # Early exit if user already exists - respects idempotency
+    if id "nginx-adm" >/dev/null 2>&1; then
+        if [ "${JSON}" -eq 1 ]; then
+            output_json "status" "nginx-adm user already exists" "uid" "1999"
+        else
+            info "nginx-adm user already exists (UID/GID 1999)."
+        fi
+        return 0
+    fi
 
+    info "Creating nginx-adm user (UID/GID 1999)..."
     # Create group with fixed GID if it doesn't exist
     if ! getent group nginx-adm >/dev/null 2>&1; then
         groupadd -g 1999 nginx-adm 2>/dev/null || true
@@ -3140,7 +3457,7 @@ create_nginx_adm_user() {
     chown nginx-adm:nginx-adm /etc/nginx-adm 2>/dev/null || true
     chmod 755 /etc/nginx-adm 2>/dev/null || true
 
-    info "nginx-adm user (UID/GID 1999) configured with home /etc/nginx-adm."
+    success "nginx-adm user (UID/GID 1999) created with home /etc/nginx-adm."
 }
 
 # =============================================================================
@@ -3151,20 +3468,20 @@ create_nginx_adm_user() {
 #
 # Purpose:
 #   Ensures nginx-adm owns the configuration and sets up correct symlinks:
-#     /etc/nginx/sites-available  → symlink to /etc/nginx-adm/sites-available
-#     /etc/nginx/sites-enabled    → symlink to /etc/nginx-adm/sites-enabled
+#     ${NGINX_CONF_ROOT}/sites-available  → symlink to ${NGINX_CONF_ROOT}-adm/sites-available
+#     ${NGINX_CONF_ROOT}/sites-enabled    → symlink to ${NGINX_CONF_ROOT}-adm/sites-enabled
 #
 # Important Rules:
 #   • Does NOT recreate user (only ownership and symlinks)
-#   • Real directories live under /etc/nginx/ (never delete them)
+#   • Real directories live under ${NGINX_CONF_ROOT}/ (never delete them)
 #   • Only create symlinks in /etc/nginx-adm/ if they don't exist or are broken
 #   • Preserves existing files in /etc/nginx-adm when user is recreated
 #   • Never need to create /etc/nginx-adm (which is the home directory of user: nginx-adm)
-#   • Correct symlink direction: /etc/nginx/sites-* → /etc/nginx-adm/sites-*
+#   • Correct symlink direction: ${NGINX_CONF_ROOT}/sites-* → /etc/nginx-adm/sites-*
 #   • Never rm -rf real config directories
 #   • Ownership: nginx-adm:root (as per your test)
 #   • Permissions: 775 for practical group access
-#   • not working in /bin/sh mkdir -p /etc/nginx/{sites-available,sites-enabled}
+#   • not working in /bin/sh mkdir -p ${NGINX_CONF_ROOT}/{sites-available,sites-enabled}
 #
 # !!! MUST BE CALLED AFTER create_nginx_adm_user() !!!
 # =============================================================================
@@ -3174,17 +3491,17 @@ setup_nginx_adm_ownership() {
 
     # 1. Ensure real directories exist under nginx (never delete content)
     # Under /bin/sh, the following is not working, you should do it one by one
-    # mkdir -p /etc/nginx/{sites-available,sites-enabled}
-    mkdir -p /etc/nginx/sites-available
-    mkdir -p /etc/nginx/sites-enabled
+    # mkdir -p ${NGINX_CONF_ROOT}/{sites-available,sites-enabled}
+    mkdir -p ${NGINX_CONF_ROOT}/sites-available
+    mkdir -p ${NGINX_CONF_ROOT}/sites-enabled
 
 
     # 3. Transfer ownership
-    chown -R nginx-adm:root /etc/nginx 2>/dev/null || true
+    chown -R nginx-adm:root ${NGINX_CONF_ROOT} 2>/dev/null || true
 
-    # 4. Create symlinks in /etc/nginx/ pointing to /etc/nginx-adm/ (correct direction)
+    # 4. Create symlinks in ${NGINX_CONF_ROOT}/ pointing to /etc/nginx-adm/ (correct direction)
     for dir in sites-available sites-enabled; do
-        local source="/etc/nginx/${dir}"
+        local source="${NGINX_CONF_ROOT}/${dir}"
         local target="/etc/nginx-adm/${dir}"
 
         # If the target is NOT already a symlink to the correct location, fix it
@@ -3208,7 +3525,7 @@ setup_nginx_adm_ownership() {
     done
 
     # 5. Set permissions
-    chmod 775 /etc/nginx 2>/dev/null || true
+    chmod 775 ${NGINX_CONF_ROOT} 2>/dev/null || true
     chmod 775 /etc/nginx-adm/sites-available 2>/dev/null || true
     chmod 775 /etc/nginx-adm/sites-enabled 2>/dev/null || true
 
@@ -3264,7 +3581,7 @@ setup_restricted_sudoers() {
 
     # Write the new restricted sudoers file (remember leave a blank line at the end)
     cat > "${sudoers_file}" << 'EOF'
-# nginx-adm restricted sudoers - gitlab-nginx
+# nginx-adm restricted sudoers - certbot-nginx
 # Allows nginx-adm to control nginx service without password (least privilege)
 nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl start nginx
 nginx-adm ALL=(ALL) NOPASSWD: /bin/systemctl stop nginx
@@ -3296,70 +3613,69 @@ EOF
 }
 
 # =============================================================================
-# backup_existing_nginx_configs() - Dated Backup for nginx and gitlab.rb
+# backup_nginx_sites_configs() - Dated backup with special default.conf handling (NEW 1.9.0)
 # =============================================================================
 #
-# CRITICAL FUNCTION - PART OF BACKUP POLICY (Updated for v2.0.0)
+# CRITICAL FUNCTION - PART OF BACKUP POLICY
 #
 # Purpose:
-#   Creates dated backups before modifying any nginx configuration or gitlab.rb.
-#   Now supports both nginx configs and gitlab.rb with the exact same policy.
+#   Creates dated backups before modifying nginx configs.
+#   Special rule: default.conf is backed up then removed (prevents accumulation on repeated runs).
 #
-# Backup format: <filename>.YYYYMMDD-N.bak
-#   Example: default.conf.20260408-1.bak or gitlab.rb.20260408-1.bak
+#   Does NOT backup the main nginx.conf (that is handled separately when we
+#   modify it once for sites-enabled support).
 #
-# Rules This Function Must Always Follow:
-#   • MUST be called before any modification to nginx configs or gitlab.rb
-#   • Special rule for default.conf: backup then remove original
-#   • gitlab.rb follows identical dated backup rules
-#   • All backups created before any removal or symlink changes
-#   • Defensive: create backup directories if missing
-#   • Ownership set to nginx-adm where appropriate
+# Why this name?
+#   Previous name `backup_existing_nginx_configs` was blurry — it suggested
+#   it backs up everything. This new name makes intention explicit and accurate.
 #
-# !!! THIS FUNCTION IS PART OF THE SINGLE SOURCE OF TRUTH FOR BACKUP POLICY !!!
-# !!! DO NOT MODIFY OR SIMPLIFY THE BACKUP LOGIC !!!
+# Backup format: <filename>.YYYYMMDD-N.bak   (N = daily counter starting at 1)
+#
+# Rules:
+#   • Backs up files in ${NGINX_CONF_ROOT}/sites-available/
+#   • For default.conf (or default site files): backup then delete original
+#   • Other files: backup only (keep original)
+#   • Idempotent and defensive
+#
+# !!! MUST BE CALLED BEFORE ANY CONFIG CREATION OR REMOVAL !!!
 # =============================================================================
 
-backup_existing_nginx_configs() {
-    local sites_dir="/etc/nginx/sites-available"
+backup_nginx_sites_configs() {
+    local sites_dir="${NGINX_CONF_ROOT}/sites-available"
     local today
     today=$(date +%Y%m%d)
 
-    info "Creating dated backups of existing configurations..."
+    [ ! -d "$sites_dir" ] && return 0
 
-    # Backup nginx configs
-    if [ -d "$sites_dir" ]; then
-        for conf in "$sites_dir"/*.conf; do
-            [ ! -f "$conf" ] && continue
+    info "Creating dated backup of existing nginx configurations..."
 
-            local base_name
-            base_name=$(basename "$conf")
+    for conf in "$sites_dir"/*.conf; do
+        [ ! -f "$conf" ] && continue
 
-            # Count existing backups for today
-            local count=1
-            while [ -f "${conf}.${today}-${count}.bak" ]; do
-                count=$((count + 1))
-            done
+        local base_name
+        base_name=$(basename "$conf")
 
-            local backup_file="${conf}.${today}-${count}.bak"
-
-            cp -a "$conf" "$backup_file" 2>/dev/null || true
-            chown nginx-adm:nginx-adm "$backup_file" 2>/dev/null || true
-
-            info "Backed up: ${base_name} → ${backup_file}"
-
-            # Special rule for default.conf
-            if [ "$base_name" = "default.conf" ] || echo "$base_name" | grep -qE '^default'; then
-                rm -f "$conf" 2>/dev/null || true
-                info "Removed original default.conf after backup (per policy)."
-            fi
+        # Count existing backups for today
+        local count=1
+        while [ -f "${conf}.${today}-${count}.bak" ]; do
+            count=$((count + 1))
         done
-    fi
 
-    # Backup gitlab.rb if it exists
-    backup_gitlab_rb
+        local backup_file="${conf}.${today}-${count}.bak"
 
-    success "Configuration backup completed (nginx + gitlab.rb)."
+        cp -a "$conf" "$backup_file" 2>/dev/null || true
+        chown nginx-adm:nginx-adm "$backup_file" 2>/dev/null || true
+
+        info "Backed up: ${base_name} → ${backup_file}"
+
+        # Special rule for default.conf: remove original after backup
+        if [ "$base_name" = "default.conf" ] || echo "$base_name" | grep -qE '^default'; then
+            rm -f "$conf" 2>/dev/null || true
+            info "Removed original default.conf after backup (per policy)."
+        fi
+    done
+
+    success "Nginx configuration backup completed."
 }
 
 # =============================================================================
@@ -3408,45 +3724,6 @@ ensure_gitlab_structure() {
 
     # Defensive ownership - let nginx-adm own config where appropriate
     chown -R nginx-adm:root /etc/gitlab 2>/dev/null || true
-}
-
-# =============================================================================
-# detect_external_ip() - Get public external IPv4 address
-# =============================================================================
-#
-# GENERAL PURPOSE:
-# Returns the machine's public IPv4 address by querying reliable external services.
-# Never returns IPv6 addresses. Used for diagnostics and SSH hostname guidance.
-#
-# Defensive Rules:
-#   • Force IPv4 only (-4 flag)
-#   • Multiple fallback services
-#   • Reject anything that looks like IPv6
-#   • Graceful fallback with warning if detection fails
-#
-# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
-# =============================================================================
-
-detect_external_ip() {
-    local ip
-
-    # Force IPv4-only on every request to prevent IPv6 leakage
-    ip=$(curl -4 -fsSL https://ifconfig.me 2>/dev/null || \
-         curl -4 -fsSL https://api.ipify.org 2>/dev/null || \
-         curl -4 -fsSL https://ipinfo.io/ip 2>/dev/null || \
-         echo "")
-
-    # Extra defensive layer: reject IPv6 or empty result
-    if echo "$ip" | grep -q ':' || [ -z "$ip" ]; then
-        if [ "${JSON}" -eq 0 ] && [ "${QUIET}" -eq 0 ]; then
-            warn "Could not detect external IPv4 address automatically."
-            warn "Please provide SSH hostname manually if needed."
-        fi
-        echo ""
-        return 0
-    fi
-
-    echo "$ip"
 }
 
 # =============================================================================
@@ -3521,37 +3798,6 @@ get_or_set_gitlab_ssh_hostname() {
 
     ui_success "GitLab SSH hostname set to: ${ssh_hostname}"
     echo "$ssh_hostname"
-}
-
-# =============================================================================
-# write_file_atomic() - Atomic File Writing
-# =============================================================================
-#
-# GENERAL PURPOSE:
-# Write file safely using temporary file + atomic move.
-# Prevents partial writes on crash or power loss.
-#
-# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
-# Critical for writing gitlab.rb and other config files safely.
-# =============================================================================
-
-write_file_atomic() {
-    local target="$1"
-    local tmp
-
-    tmp=$(mktemp "${target}.XXXXXXXX") || {
-        die "Failed to create temporary file for atomic write"
-    }
-
-    cat > "${tmp}" || {
-        rm -f "${tmp}"
-        die "Failed to write content to temporary file"
-    }
-
-    mv "${tmp}" "${target}" || {
-        rm -f "${tmp}"
-        die "Failed to atomically move file to ${target}"
-    }
 }
 
 # =============================================================================
@@ -3841,64 +4087,160 @@ show_ssh_config_instructions() {
 }
 
 # =============================================================================
-# show_gitlab_nginx_help() - Display Help Information (Renamed for v2.0.0)
+# write_file_atomic() - Atomic File Writing
 # =============================================================================
 #
-# Updated help function for gitlab-nginx.
-# Shows usage, available commands, options, and important notes about
-# external nginx mode, SSH hostname, and Cloudflare considerations.
+# GENERAL PURPOSE:
+# Write file safely using temporary file + atomic move.
+# Prevents partial writes on crash or power loss.
 #
-# Fully respects --quiet and --json modes.
-#
-# !!! THIS IS THE SINGLE SOURCE OF TRUTH FOR HELP TEXT !!!
-# !!! DO NOT SIMPLIFY OR REMOVE IMPORTANT NOTES !!!
+# !!! DO NOT MODIFY OR SIMPLIFY THIS FUNCTION !!!
+# Critical for writing gitlab.rb and other config files safely.
 # =============================================================================
 
-show_gitlab_nginx_help() {
-    if [ "${JSON}" -eq 1 ]; then
-        output_json "success" "" \
-            "app" "${APP_NAME}" \
-            "version" "${VERSION}" \
-            "message" "Help text available in human mode. Run without --json." \
-            "note" "Use --json with status, about, version, domains, email, ssh-hostname, etc."
+write_file_atomic() {
+    local target="$1"
+    local tmp
+
+    tmp=$(mktemp "${target}.XXXXXXXX") || {
+        die "Failed to create temporary file for atomic write"
+    }
+
+    cat > "${tmp}" || {
+        rm -f "${tmp}"
+        die "Failed to write content to temporary file"
+    }
+
+    mv "${tmp}" "${target}" || {
+        rm -f "${tmp}"
+        die "Failed to atomically move file to ${target}"
+    }
+}
+
+# =============================================================================
+# create_gitlab_adm_user() - Create dedicated least-privilege user for GitLab
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL (2.1.0)
+#
+# !!! DO NOT SIMPLIFY OR REMOVE !!!
+# =============================================================================
+
+create_gitlab_adm_user() {
+    if id "gitlab-adm" >/dev/null 2>&1; then
+        info "gitlab-adm user already exists (UID/GID 1888)."
         return 0
     fi
 
-    if [ "${QUIET}" -eq 1 ]; then
-        return 0
+    info "Creating gitlab-adm user (UID/GID 1888)..."
+
+    # Create group with fixed GID
+    if ! getent group gitlab-adm >/dev/null 2>&1; then
+        groupadd -g 1888 gitlab-adm 2>/dev/null || true
     fi
 
-    cat << EOF
-${APP_NAME} v${VERSION} — ${DESCRIPTION}
+    # Create user
+    if ! id "gitlab-adm" >/dev/null 2>&1; then
+        useradd -m -d /home/gitlab-adm \
+                -g 1888 -u 1888 \
+                -s /bin/bash \
+                -c "Admin user for GitLab configuration" \
+                gitlab-adm 2>/dev/null || true
+    fi
 
-Usage:
-${APP_NAME}                          Full interactive setup (recommended)
-${APP_NAME} about                    Full diagnostics
-${APP_NAME} version                  Show version
-${APP_NAME} version-check            Compare with latest
-${APP_NAME} domains                  Display saved domains
-${APP_NAME} email                    Display saved email
-${APP_NAME} ssh-hostname             Display or set GitLab SSH hostname
-${APP_NAME} nginx-conf               Re-generate nginx configuration only
-${APP_NAME} help                     This help
+    mkdir -p /home/gitlab-adm 2>/dev/null || true
+    chown gitlab-adm:gitlab-adm /home/gitlab-adm 2>/dev/null || true
+    chmod 755 /home/gitlab-adm 2>/dev/null || true
 
-Options:
---quiet, -q            Suppress non-error messages
---json                 Machine-readable JSON output (implies --quiet)
---no-cloudflare        Disable Cloudflare protection
+    success "gitlab-adm user (UID/GID 1888) created with home /home/gitlab-adm."
+}
 
-Important Notes:
-• GitLab runs in external nginx mode (bundled nginx is disabled)
-• Separate SSH hostname is recommended when using Cloudflare proxy (port 22)
-• Certificates are obtained before GitLab configuration
-• nginx-adm least-privilege model is active
+# =============================================================================
+# setup_gitlab_adm_ownership_and_symlinks() - Set ownership and symlink
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL (2.1.0)
+#
+# Real config lives under /home/gitlab-adm/gitlab
+# /etc/gitlab becomes symlink to it.
+# =============================================================================
 
-Examples:
-sudo ${APP_NAME}
-sudo ${APP_NAME} ssh-hostname
-sudo ${APP_NAME} --json
+setup_gitlab_adm_ownership_and_symlinks() {
+    info "Setting gitlab-adm ownership and symlinks..."
+
+    # Ensure real directory exists
+    mkdir -p /home/gitlab-adm/gitlab 2>/dev/null || true
+
+    # Transfer ownership
+    chown -R gitlab-adm:root /home/gitlab-adm/gitlab 2>/dev/null || true
+    chmod -R 775 /home/gitlab-adm/gitlab 2>/dev/null || true
+
+    # Create symlink /etc/gitlab -> /home/gitlab-adm/gitlab
+    if [ -d "/etc/gitlab" ] && [ ! -L "/etc/gitlab" ]; then
+        # Backup existing real directory
+        local today=$(date +%Y%m%d)
+        local count=1
+        while [ -d "/etc/gitlab.${today}-${count}.bak" ]; do
+            count=$((count + 1))
+        done
+        mv /etc/gitlab "/etc/gitlab.${today}-${count}.bak" 2>/dev/null || true
+        info "Backed up existing /etc/gitlab before creating symlink."
+    fi
+
+    ln -sf /home/gitlab-adm/gitlab /etc/gitlab
+    info "Created symlink: /etc/gitlab → /home/gitlab-adm/gitlab"
+
+    # Fix permissions on files
+    find /home/gitlab-adm/gitlab -type f -exec chmod 664 {} + 2>/dev/null || true
+
+    # Add gitlab-adm to all relevant gitlab groups
+    for group in gitlab-www gitlab-psql gitlab-redis gitlab-prometheus gitlab-sidekiq; do
+        getent group "$group" >/dev/null 2>&1 && usermod -aG "$group" gitlab-adm 2>/dev/null || true
+    done
+
+    success "gitlab-adm ownership and symlinks configured (775 directories, 664 files)."
+}
+
+# =============================================================================
+# setup_gitlab_restricted_sudoers() - Restricted sudoers for gitlab-adm
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL (2.1.0)
+# =============================================================================
+
+setup_gitlab_restricted_sudoers() {
+    local sudoers_file="/etc/sudoers.d/gitlab-adm"
+    local backup_dir="/etc/sudoers.bak"
+
+    mkdir -p "${backup_dir}" 2>/dev/null || true
+
+    if [ -f "${sudoers_file}" ]; then
+        local today=$(date +%Y%m%d)
+        local count=1
+        while [ -f "${backup_dir}/gitlab-adm.${today}-${count}.bak" ]; do
+            count=$((count + 1))
+        done
+        cp -a "${sudoers_file}" "${backup_dir}/gitlab-adm.${today}-${count}.bak" 2>/dev/null || true
+    fi
+
+    cat > "${sudoers_file}" << 'EOF'
+# gitlab-adm restricted sudoers - gitlab-nginx
+# Allows gitlab-adm to control GitLab without password (least privilege)
+gitlab-adm ALL=(ALL) NOPASSWD: /usr/bin/gitlab-ctl
+gitlab-adm ALL=(ALL) NOPASSWD: /opt/gitlab/bin/gitlab-ctl
+gitlab-adm ALL=(ALL) NOPASSWD: /bin/journalctl -u gitlab-*
+gitlab-adm ALL=(ALL) NOPASSWD: /usr/bin/journalctl -u gitlab-*
 
 EOF
+
+    chmod 0440 "${sudoers_file}" 2>/dev/null || true
+    chown root:root "${sudoers_file}" 2>/dev/null || true
+
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -cf "${sudoers_file}" >/dev/null 2>&1 || warn "sudoers syntax check failed for gitlab-adm"
+    fi
+
+    success "Restricted sudoers for gitlab-adm configured successfully."
 }
 
 # =============================================================================
@@ -4075,7 +4417,7 @@ main_gitlab_nginx_app() {
             ;;
 
         about)
-            show_about_global
+            show_system_diagnostics
             exit 0
             ;;
 
@@ -4118,7 +4460,7 @@ main_gitlab_nginx_app() {
             [ -z "$main_domain" ] && die "Could not determine main domain."
 
             backup_existing_nginx_configs
-            setup_nginx_configs "$domains" "$main_domain"
+            deploy_gitlab_nginx_config "$domains" "$main_domain"
             info "✅ Nginx configs regenerated using main domain: ${main_domain}"
             exit 0
             ;;

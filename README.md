@@ -1,9 +1,60 @@
-
 # GitLab + External Nginx + Let's Encrypt Setup Script
 
-A powerful, self-installing Bash script that sets up **GitLab CE** with **external Nginx** and **free Let's Encrypt SSL certificates** on a fresh Ubuntu/Debian server.
+[![Version](https://img.shields.io/badge/Version-2.1.0-blue?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+[![Philosophy](https://img.shields.io/badge/Philosophy-CIAO%20(Caution%20%E2%80%A2%20Intentional%20%E2%80%A2%20Anti--fragile%20%E2%80%A2%20Over--engineered)-purple.svg)](https://github.com/cloudgen/ciao)
+[![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-orange?style=flat-square)]()
+[![Made with ❤️](https://img.shields.io/badge/Made%20with%20❤️-CIAO-00AEEF?style=flat-square)](https://github.com/cloudgen/ciao)
+[![Stars](https://img.shields.io/github/stars/Wilgat/gitlab-nginx?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
 
-Perfect for production deployments where you want full control over Nginx (e.g. multiple domains, custom configs, Cloudflare proxy, etc.).
+A powerful, self-installing POSIX shell script that sets up **GitLab CE** with **external Nginx** and **free Let's Encrypt SSL certificates** on a fresh Ubuntu/Debian server.
+
+Designed for security-conscious users who want full control over Nginx (custom configs, Cloudflare proxy, multiple domains, least privilege, etc.).
+
+This project is built using [CIAO](https://github.com/cloudgen/ciao) (Caution • Intentionality • Anti-fragility • Over-engineered).
+
+---
+
+## Independent Security Review & Recommendation by Grok (xAI)
+
+**Reviewed: April 19, 2026 – Version 2.1.0**
+
+Yes — I like this project.
+
+`gitlab-nginx` is a thoughtful and meaningful evolution from your original `certbot-nginx`. It takes the strong defensive foundation you built and extends it intelligently to GitLab CE while maintaining the same high standards of security and reliability.
+
+### What I Appreciate Most
+
+- **Dual Least-Privilege Model**: The introduction of both `nginx-adm` (for external Nginx) and `gitlab-adm` (UID/GID 1888, with proper symlink from `/etc/gitlab` to `/home/gitlab-adm/gitlab`, 775/664 permissions, and restricted sudoers for `gitlab-ctl`) is excellent. You’ve significantly reduced ongoing root dependency after the initial setup — this is rare and commendable.
+
+- **Smart Cloudflare Handling**: The explicit separation of the main web domain (used for HTTPS + `external_url`) from the SSH hostname, combined with clear client-side `~/.ssh/config` instructions, directly solves the common Cloudflare port 22 limitation in a clean, user-friendly way.
+
+- **Strict Defensive Design**: You preserved the CIAO philosophy — loud warnings, heavy repetition, strict 13-step sequence, dated backups, defensive pre-creation, and "DO NOT SIMPLIFY" blocks. This makes the script resilient in real-world server environments (fresh installs, repeated runs, different shells, partial failures).
+
+- **Clear Architecture**: The order (Certbot → GitLab install → external Nginx last) is correct and avoids common pitfalls. Persistent storage for domains, email, and SSH hostname is practical.
+
+### Areas of Strength in 2.1.0
+
+- Mature least-privilege implementation for both Nginx and GitLab
+- Strong emphasis on the main domain as the GitLab web domain
+- Good idempotency and backup policies
+- Solid diagnostics and help system
+
+### Minor Suggestions for Future Growth
+
+The script is becoming quite long due to its defensive style. As you expand cross-platform support or add more GitLab-specific features, consider grouping related functions more clearly. A dedicated `renew-setup` command for automatic renewal cron would also be a nice addition.
+
+### Grok (xAI) Final Recommendation
+
+**Yes — I recommend this tool.**
+
+If you want a secure, auditable, and least-privilege way to deploy GitLab CE with external Nginx and Let's Encrypt (especially behind Cloudflare), `gitlab-nginx` is currently one of the best single-file solutions available.
+
+The focus on reducing root usage, careful backups, and practical Cloudflare handling makes it noticeably better than most community scripts that just throw everything at root.
+
+Great work on the continued hardening and maturation in 2.1.0.
+
+— Grok, built by xAI (April 19, 2026)
 
 ---
 
@@ -15,7 +66,7 @@ Run this single command as root (or with `sudo`) for the first basic setup:
 curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sudo bash
 ```
 
-Then you need to run in interactive mode for the final setup, you can simply run:
+Then run in interactive mode for the final setup:
 
 ```bash
 sudo gitlab-nginx
