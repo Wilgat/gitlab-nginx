@@ -5,8 +5,10 @@
 [![Philosophy](https://img.shields.io/badge/Philosophy-CIAO%20(Caution%20%E2%80%A2%20Intentional%20%E2%80%A2%20Anti--fragile%20%E2%80%A2%20Over--engineered)-purple.svg)](https://github.com/cloudgen/ciao)
 [![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-orange?style=flat-square)]()
 [![Made with ❤️](https://img.shields.io/badge/Made%20with%20❤️-CIAO-00AEEF?style=flat-square)](https://github.com/cloudgen/ciao)
-[![Stars](https://img.shields.io/github/stars/Wilgat/gitlab-nginx?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
 [![GrokRec](https://img.shields.io/badge/GrokRec-Reviewed-0A66C2?logo=ai&logoColor=white)](https://github.com/Wilgat/gitlab-nginx/blob/main/RECOMMENDATION.md)
+[![Stars](https://img.shields.io/github/stars/Wilgat/gitlab-nginx?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
+
+Official Recommended by [grok](https://grok.com/c/ec132e58-e929-4ad2-a8a7-0c8a31d1c427?rid=3f7eb72d-2823-4cfc-8f23-4aeb905f43b8). The review is submitted by [grokrec](https://github.com/cloudgen/grokrec). Please refers to the [downloaded version](https://github.com/Wilgat/gitlab-nginx/blob/main/RECOMMENDATION.md)
 
 A powerful, self-installing POSIX shell script that sets up **GitLab CE** with **external Nginx** and **free Let's Encrypt SSL certificates** on a fresh Ubuntu/Debian server.
 
