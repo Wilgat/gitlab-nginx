@@ -1,6 +1,6 @@
 # GitLab + External Nginx + Let's Encrypt Setup Script
 
-[![Version](https://img.shields.io/badge/Version-2.2.0-blue?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
+[![Version](https://img.shields.io/badge/Version-2.3.1-blue?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Philosophy](https://img.shields.io/badge/Philosophy-CIAO%20(Caution%20%E2%80%A2%20Intentional%20%E2%80%A2%20Anti--fragile%20%E2%80%A2%20Over--engineered)-purple.svg)](https://github.com/cloudgen/ciao)
 [![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-orange?style=flat-square)]()
@@ -15,6 +15,8 @@ A powerful, self-installing POSIX shell script that sets up **GitLab CE** with *
 Designed for security-conscious users who want full control over Nginx (custom configs, Cloudflare proxy, multiple domains, least privilege, etc.).
 
 This project is built using [CIAO](https://github.com/cloudgen/ciao) (Caution • Intentionality • Anti-fragility • Over-engineered).
+
+**Architecture (2.3.0+):** specialized from [selfmanaged](https://github.com/cloudgen/selfmanaged) Type 0 bootstrap (install / version-check / self-update / self-uninstall) plus GitLab/Nginx domain commands (, , , , ).
 
 ---
 
@@ -70,14 +72,14 @@ curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-ngi
 ### Secure installation with checksum verification (v2 – strongly recommended)
 ```bash
 # Verify download cryptographically before running
-CHECKSUM=98f0df03ad0eea59d4b1f0b92478be41d26249f643956720628ea8adeca63dd1 \
+CHECKSUM=1a328412794eafdd02d2933e92c6464bd61971b4b0527a5db0edebd73af37e50 \
   curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sh
 ```
 
 After installation, run the full interactive setup:
 
 ```bash
-sudo gitlab-nginx
+sudo gitlab-nginx run
 ```
 
 ---
@@ -100,7 +102,7 @@ sudo gitlab-nginx
 1. Install the script (see One-Command section above — use checksum for security)
 2. Run full setup:
    ```bash
-   sudo gitlab-nginx
+   sudo gitlab-nginx run
    ```
 3. Follow the interactive prompts (domains, email, SSH hostname)
 4. GitLab will be available at `https://your-main-domain.com`
@@ -111,13 +113,18 @@ sudo gitlab-nginx
 
 | Command                          | Description                                              |
 |----------------------------------|----------------------------------------------------------|
-| `sudo gitlab-nginx`              | Full interactive setup (recommended)                     |
+| `gitlab-nginx` / `install`       | Type O install-ensure (empty argv or install)            |
+| `sudo gitlab-nginx run`          | Full interactive setup (recommended)                     |
 | `sudo gitlab-nginx nginx-conf`   | Regenerate only Nginx configuration                      |
 | `sudo gitlab-nginx domains`      | Show saved domains                                       |
 | `sudo gitlab-nginx email`        | Show saved Let's Encrypt email                           |
-| `sudo gitlab-nginx about`        | Full system diagnostics (nginx-adm + gitlab-adm)         |
+| `sudo gitlab-nginx ssh-hostname` | GitLab SSH hostname (Cloudflare-friendly)                |
+| `gitlab-nginx about`             | Diagnostics (Type 0 + domain)                            |
+| `gitlab-nginx version-check`     | Compare local vs remote                                  |
+| `gitlab-nginx self-update`       | Update CLI from channel                                  |
+| `gitlab-nginx help`              | Full usage                                               |
 
-**Global Options**: `--quiet`, `--json`, `--no-cloudflare`, `--force-reinstall`
+**Global Options**: `--quiet`, `--json`, `--no-cloudflare`, `--force`, `--debug`
 
 ---
 

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-08-11
+
+### Fixed
+- **`run` non-interactive requires root** (`check_root` at start of `run_non_interactive_setup`) — prevents partial host mutations and false success as non-root.
+- Non-interactive completion message points to `sudo gitlab-nginx run` (not bare command).
+- CI tests isolate `GLOBAL_BIN` so host `/usr/local/bin/gitlab-nginx` cannot shadow local install lifecycle tests.
+
+## [2.3.0] - 2026-08-11
+
+### Changed
+- **Bootstrap re-specialize from selfmanaged 1.2.1** (A→B only):
+  - Type 0 architecture inheritance: central `out_*` output SSOT, `inst_*` lifecycle, single `app_main` dispatcher, Type O empty-argv install-ensure.
+  - Channel identity retained: `Wilgat/gitlab-nginx`, companion `gitlab-nginx.sha256`.
+  - Domain DNA (GitLab CE + external Nginx + Certbot, nginx-adm / gitlab-adm, 13-step setup) grafted with `out_*` compatibility shims.
+- **CLI contract**: full host setup is now `sudo gitlab-nginx run` (alias `setup`). Empty argv is **install-ensure only** (no longer starts interactive domain setup).
+- Product law registered under `docs/requirements/` (class + shell + **`requirement-domain-gitlab-nginx`**).
+
+### Fixed
+- Missing `deploy_gitlab_nginx_config` compatibility wrapper → `deploy_domain_nginx_configs`.
+
 ## [2.2.0] - 2026-04-20
 
 ### Added

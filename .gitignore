@@ -1,0 +1,105 @@
+# =============================================================================
+# .gitignore — skill-create-gitignore (+ skill-commit-check)
+# Workspace: genesis-template (harness knowledge only; no specialized ship unit)
+# Docs: track docs/requirements/** ; ignore skills/incidents/terminologies (and other docs)
+# Artifacts: universal compiled/temp/secrets/caches; shell run debris
+# Do NOT ignore (when present after specialize): README.md, CHANGELOG.md, ship unit + companion .sha256
+# =============================================================================
+
+# --- Secrets / local env ---
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+
+# --- OS ---
+.DS_Store
+.DS_Store?
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# --- Editors / IDEs ---
+*.swp
+*.swo
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.code-workspace
+
+# --- Temp / scratch / logs ---
+tmp/
+temp/
+temps/
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.log
+logs/
+*.pid
+*.seed
+
+# --- Generic compiled / package outputs (defense in depth) ---
+build/
+dist/
+out/
+output/
+obj/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.class
+*.jar
+*.war
+*.ear
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+*.whl
+*.rlib
+*.rmeta
+
+# --- Caches ---
+.cache/
+*.cache
+.turbo/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Shell / local run debris ---
+*.YYYYMMDD-*.bak
+
+# --- Harness transfer safety backups (H1/H2; not payload) ---
+.harness-transfer-bak-*/
+.harness-sync-*-bak-*/
+.harness-*-bak-*/
+.harness-backup-*/
+.h1-backup-*/
+.h2-backup-*/
+.bootstrap-archive/
+
+# --- Agent contract (local workspace) ---
+AGENTS.md
+
+# --- Docs layer: ignore all docs, re-include requirements only ---
+# Includes docs/policies/ (policy-*.md), skills, terminologies, templates, etc.
+# Policies must NOT be public product surface.
+docs/**
+!docs/requirements/
+!docs/requirements/**
