@@ -5,12 +5,12 @@ Maps **portable TP families** (proof molds) and product domain cases to product-
 | Field | Value |
 |-------|--------|
 | **Product** | gitlab-nginx |
-| **Ship unit** | `./gitlab-nginx` · `VERSION=2.3.1` |
+| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.1` |
 | **Companion** | `./gitlab-nginx.sha256` |
 | **Suite entry** | `./tests/run.sh` |
 | **Live law** | **11** Active REQs — `docs/requirements/index.md` |
 | **Bootstrap origin** | selfmanaged 1.2.1 (A→B specialize) |
-| **Last update** | 2026-08-11 (2.3.1: root fail-closed on non-interactive `run`; GLOBAL_BIN test isolation) |
+| **Last update** | 2026-08-12 (2.5.1: dual LPU home `/etc/*-adm`, `remove-lpu` + `userdel -r`; docs version align) |
 
 Status: **have** = automated · **todo** = needed · **n/a** = not applicable · **optional** = gated (root/host)
 
@@ -23,7 +23,7 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | **TP-CLI** | `PM-SHELL-CLI-TEST-PLAN` | `tests/test_cli.sh` | RQ-SHELL-CLI-INTERFACE · RQ-SHELL-CLI-STORAGE · RQ-SHELL-OUTPUT-REQUIREMENTS |
 | **TP-LC** | `PM-INSTALL-LIFECYCLE-TEST-PLAN` | `tests/test_install_lifecycle.sh` | RQ-SHELL-SELF-MANAGEMENT · RQ-SHELL-IDEMPOTENCY · RQ-SHELL-AUTOMATIC-CHECKSUM |
 | **TP-CSUM** | `PM-CHECKSUM-TEST-PLAN` | CLI + lifecycle | RQ-SHELL-AUTOMATIC-CHECKSUM |
-| **TP-GLN** | `PM-DOMAIN-TEST-PLAN` (domain subject) | `tests/test_domain.sh` | **RQ-DOMAIN-GITLAB-NGINX** |
+| **TP-GLN** | `PM-DOMAIN-TEST-PLAN` (domain subject) | `tests/test_domain.sh` | **RQ-DOMAIN-GITLAB-NGINX** (`remove-lpu` catalog; host teardown optional/root) |
 | Umbrella | `PM-SHELL-CLI-SUITE-TEST-PLAN` | `tests/run.sh` | full Type 0 + domain surface |
 
 **Storage split:** shell scratch / about fields → **RQ-SHELL-CLI-STORAGE** (TP-CLI). Domain host paths (`/etc/letsencrypt/*`) → **RQ-DOMAIN-GITLAB-NGINX** (TP-GLN about fields; host-mutating ops optional).

@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-08-12
+
+### Changed
+- **LPU glossary dual structure (portable + product):** teach least-privilege system users as portable patterns with nested product specialization (not pure product silos).
+  - `least-privilege-model` promoted to **portable** multi-surface architecture + dual (`nginx-adm` / `gitlab-adm`) product specialization.
+  - `user-nginx-adm` / `user-gitlab-adm` / `sudoers-nginx-adm` / `sudoers-gitlab-adm`: portable pattern sections + product F1–F7 / Cmnd SSOT.
+  - Parents (`least-privilege-user`, `system-user`, `least-privilege-user-sudoers`, `system-user-home`, `least-privilege`) and index aligned; `terminology-portability` dual-structure rule.
+  - Skill **`SK-CREATE-LEAST-PRIVILEGE-USER-TERMINOLOGY`** v1.3.0: §3.3 dual structure mandatory.
+  - **H1** dual-structure LPU knowledge synced to `genesis-template` (2026-08-12).
+- **`remove-lpu` F7 path:** home is **auto-detected** from passwd (`lpu_detect_home`); account+home removed with **`userdel -r`** (`lpu_userdel_r`) — **no** manual home-path `rm` in the remove path.
+  - Order: sudoers backup+remove → reverse **affected** ownership / restore `/etc/gitlab` from symlink (before account delete) → `userdel -r`.
+  - Glossary F7, domain REQ, molds, and LPU terminology skill aligned.
+- **Housekeeping (2.5.1 product surfaces):** README version badge + install `CHECKSUM=` pin + commands/`remove-lpu`; SECURITY supported versions; reviews test-plan ship version; domain registry row title.
+
+## [2.5.0] - 2026-08-12
+
+### Changed
+- **`gitlab-adm` system-user home → `/etc/gitlab-adm`** (**preferred-/etc**, aligned with LPU default and `nginx-adm`).
+  - Real config (affected): `/etc/gitlab-adm/gitlab`; public path `/etc/gitlab` → symlink.
+  - Setup migrates legacy `/home/gitlab-adm/gitlab` and rewrites home via `usermod -d` when the account already exists.
+  - `remove-lpu gitlab` restores config from new or legacy symlink targets before account removal.
+
+## [2.4.0] - 2026-08-11
+
+### Added
+- **`remove-lpu [nginx|gitlab|all]`** domain command (root; `--force` for non-interactive): implements terminology F7 teardown for dual least-privilege operators.
+  - Aliases: `remove-nginx-adm`, `remove-gitlab-adm`.
+  - Handlers: `remove_nginx_adm_least_privilege`, `remove_gitlab_adm_least_privilege`, orchestrator `remove_least_privilege_operators`.
+  - nginx-adm: backup/remove sudoers, drop home site symlinks, reverse `${NGINX_CONF_ROOT}` ownership to `root:root`, `userdel`/`groupdel`, remove `/etc/nginx-adm`.
+  - gitlab-adm: backup/remove sudoers, restore `/etc/gitlab` from symlink (preserve config), `root:root` ownership, account/group/home cleanup.
+  - Does **not** uninstall Omnibus packages, wipe `/var/opt/gitlab`, or delete Nginx site file contents.
+- Domain requirement + help/about notes for `remove-lpu`; glossary F7 on `user-nginx-adm` / `user-gitlab-adm` marked implemented.
+
 ## [2.3.1] - 2026-08-11
 
 ### Fixed

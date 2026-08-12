@@ -48,8 +48,8 @@ APP_NAME="gitlab-nginx"
 : "${SHORT_DESCRIPTION:=${APP_DESC}}"
 : "${DESCRIPTION:=POSIX /bin/sh Type 0 CLI: install, version-check, self-update, self-uninstall, about, plus GitLab/Nginx domain setup.}"
 # Product version SSOT (semver). Extractors use: grep \'^VERSION="\'
-VERSION="2.3.1"
-: "${VERSION:=2.3.1}"
+VERSION="2.5.1"
+: "${VERSION:=2.5.1}"
 
 # Runtime flags (safe defaults)
 : "${QUIET:=0}"
@@ -2403,7 +2403,7 @@ detect_nginx_platform_paths() {
 #     • nginx-adm least-privilege status (for external nginx configuration)
 #     • gitlab-adm least-privilege status (for GitLab configuration tree)
 #     • Nginx platform detection and current paths
-#     • GitLab configuration symlink status (/etc/gitlab → /home/gitlab-adm/gitlab)
+#     • GitLab configuration symlink status (/etc/gitlab → /etc/gitlab-adm/gitlab)
 #     • Shell, current user, TTY, and interactive state
 #
 # Why this name and scope?
@@ -2549,9 +2549,9 @@ show_system_diagnostics() {
     msg "=== gitlab-adm Least-Privilege Status ==="
     if id "gitlab-adm" >/dev/null 2>&1; then
         success "gitlab-adm user exists (UID/GID 1888)"
-        msg "   Home directory : /home/gitlab-adm"
+        msg "   Home directory : /etc/gitlab-adm (preferred-/etc; legacy /home/gitlab-adm may still exist during migrate)"
         if [ -L "/etc/gitlab" ]; then
-            success "   /etc/gitlab symlink: active → /home/gitlab-adm/gitlab"
+            success "   /etc/gitlab symlink: active → $(readlink /etc/gitlab 2>/dev/null || echo /etc/gitlab-adm/gitlab)"
         else
             warn "   /etc/gitlab symlink: MISSING or broken"
         fi
@@ -5131,65 +5131,97 @@ write_file_atomic() {
 # create_gitlab_adm_user() - Create dedicated least-privilege user for GitLab
 # =============================================================================
 #
-# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL (2.1.0)
+# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL
+#
+# Home (F3 preferred-/etc): /etc/gitlab-adm  (LPU default: /etc/{{user}} first)
+# Legacy home: /home/gitlab-adm — migrated by setup_gitlab_adm_ownership_and_symlinks
 #
 # !!! DO NOT SIMPLIFY OR REMOVE !!!
 # =============================================================================
 
 create_gitlab_adm_user() {
-    if id "gitlab-adm" >/dev/null 2>&1; then
-        info "gitlab-adm user already exists (UID/GID 1888)."
-        return 0
-    fi
-
-    info "Creating gitlab-adm user (UID/GID 1888)..."
+    local home_dir="/etc/gitlab-adm"
 
     # Create group with fixed GID
     if ! getent group gitlab-adm >/dev/null 2>&1; then
         groupadd -g 1888 gitlab-adm 2>/dev/null || true
     fi
 
-    # Create user
-    if ! id "gitlab-adm" >/dev/null 2>&1; then
-        useradd -m -d /home/gitlab-adm \
+    if id "gitlab-adm" >/dev/null 2>&1; then
+        info "gitlab-adm user already exists (UID/GID 1888)."
+        # Align home to preferred-/etc when still on legacy /home
+        local cur_home
+        cur_home=$(getent passwd gitlab-adm 2>/dev/null | cut -d: -f6)
+        if [ -n "${cur_home}" ] && [ "${cur_home}" != "${home_dir}" ]; then
+            info "Updating gitlab-adm home ${cur_home} → ${home_dir} (preferred-/etc)."
+            usermod -d "${home_dir}" gitlab-adm 2>/dev/null || true
+        fi
+    else
+        info "Creating gitlab-adm user (UID/GID 1888, home ${home_dir})..."
+        useradd -m -d "${home_dir}" \
                 -g 1888 -u 1888 \
                 -s /bin/bash \
                 -c "Admin user for GitLab configuration" \
                 gitlab-adm 2>/dev/null || true
     fi
 
-    mkdir -p /home/gitlab-adm 2>/dev/null || true
-    chown gitlab-adm:gitlab-adm /home/gitlab-adm 2>/dev/null || true
-    chmod 755 /home/gitlab-adm 2>/dev/null || true
+    mkdir -p "${home_dir}" 2>/dev/null || true
+    chown gitlab-adm:gitlab-adm "${home_dir}" 2>/dev/null || true
+    chmod 755 "${home_dir}" 2>/dev/null || true
 
-    success "gitlab-adm user (UID/GID 1888) created with home /home/gitlab-adm."
+    success "gitlab-adm user (UID/GID 1888) with home ${home_dir} (preferred-/etc)."
 }
 
 # =============================================================================
 # setup_gitlab_adm_ownership_and_symlinks() - Set ownership and symlink
 # =============================================================================
 #
-# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL (2.1.0)
+# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL
 #
-# Real config lives under /home/gitlab-adm/gitlab
-# /etc/gitlab becomes symlink to it.
+# Real config (F5): /etc/gitlab-adm/gitlab
+# Public path (F4): /etc/gitlab → symlink to real config
+# Migrates legacy /home/gitlab-adm/gitlab when present.
 # =============================================================================
 
 setup_gitlab_adm_ownership_and_symlinks() {
-    info "Setting gitlab-adm ownership and symlinks..."
+    local home_dir="/etc/gitlab-adm"
+    local real_cfg="${home_dir}/gitlab"
+    local legacy_home="/home/gitlab-adm"
+    local legacy_cfg="${legacy_home}/gitlab"
 
-    # Ensure real directory exists
-    mkdir -p /home/gitlab-adm/gitlab 2>/dev/null || true
+    info "Setting gitlab-adm ownership and symlinks (home ${home_dir})..."
 
-    # Transfer ownership
-    chown -R gitlab-adm:root /home/gitlab-adm/gitlab 2>/dev/null || true
-    chmod -R 775 /home/gitlab-adm/gitlab 2>/dev/null || true
+    mkdir -p "${home_dir}" 2>/dev/null || true
+    chown gitlab-adm:gitlab-adm "${home_dir}" 2>/dev/null || true
+    chmod 755 "${home_dir}" 2>/dev/null || true
 
-    # Create symlink /etc/gitlab -> /home/gitlab-adm/gitlab
+    # Migrate legacy real config tree → preferred path (once)
+    if [ -d "${legacy_cfg}" ]; then
+        if [ ! -d "${real_cfg}" ] || [ -z "$(ls -A "${real_cfg}" 2>/dev/null || true)" ]; then
+            info "Migrating legacy GitLab config ${legacy_cfg} → ${real_cfg}..."
+            mkdir -p "${home_dir}" 2>/dev/null || true
+            if mv "${legacy_cfg}" "${real_cfg}" 2>/dev/null; then
+                info "Moved ${legacy_cfg} → ${real_cfg}."
+            else
+                mkdir -p "${real_cfg}" 2>/dev/null || true
+                cp -a "${legacy_cfg}/." "${real_cfg}/" 2>/dev/null || true
+                info "Copied ${legacy_cfg} → ${real_cfg}."
+            fi
+        else
+            info "Both legacy ${legacy_cfg} and ${real_cfg} exist — keeping ${real_cfg}; leave legacy for admin review."
+        fi
+    fi
+
+    # If /etc/gitlab is a real dir with content and real_cfg empty, seed from it before symlink
     if [ -d "/etc/gitlab" ] && [ ! -L "/etc/gitlab" ]; then
-        # Backup existing real directory
-        local today=$(date +%Y%m%d)
-        local count=1
+        if [ ! -d "${real_cfg}" ] || [ -z "$(ls -A "${real_cfg}" 2>/dev/null || true)" ]; then
+            mkdir -p "${real_cfg}" 2>/dev/null || true
+            cp -a /etc/gitlab/. "${real_cfg}/" 2>/dev/null || true
+            info "Seeded ${real_cfg} from existing /etc/gitlab before symlink."
+        fi
+        local today count
+        today=$(date +%Y%m%d)
+        count=1
         while [ -d "/etc/gitlab.${today}-${count}.bak" ]; do
             count=$((count + 1))
         done
@@ -5197,18 +5229,32 @@ setup_gitlab_adm_ownership_and_symlinks() {
         info "Backed up existing /etc/gitlab before creating symlink."
     fi
 
-    ln -sf /home/gitlab-adm/gitlab /etc/gitlab
-    info "Created symlink: /etc/gitlab → /home/gitlab-adm/gitlab"
+    # Ensure real directory exists
+    mkdir -p "${real_cfg}" 2>/dev/null || true
 
-    # Fix permissions on files
-    find /home/gitlab-adm/gitlab -type f -exec chmod 664 {} + 2>/dev/null || true
+    # Transfer ownership (affected folder)
+    chown -R gitlab-adm:root "${real_cfg}" 2>/dev/null || true
+    chmod -R 775 "${real_cfg}" 2>/dev/null || true
 
-    # Add gitlab-adm to all relevant gitlab groups
+    # Symlink public path → real config
+    # Also rewrite legacy symlink target /home/gitlab-adm/gitlab → new path
+    if [ -L "/etc/gitlab" ]; then
+        local cur_target
+        cur_target=$(readlink /etc/gitlab 2>/dev/null || true)
+        if [ "${cur_target}" != "${real_cfg}" ] && [ "${cur_target}" != "${real_cfg}/" ]; then
+            info "Updating /etc/gitlab symlink ${cur_target} → ${real_cfg}."
+        fi
+    fi
+    ln -sfn "${real_cfg}" /etc/gitlab
+    info "Created/updated symlink: /etc/gitlab → ${real_cfg}"
+
+    find "${real_cfg}" -type f -exec chmod 664 {} + 2>/dev/null || true
+
     for group in gitlab-www gitlab-psql gitlab-redis gitlab-prometheus gitlab-sidekiq; do
         getent group "$group" >/dev/null 2>&1 && usermod -aG "$group" gitlab-adm 2>/dev/null || true
     done
 
-    success "gitlab-adm ownership and symlinks configured (775 directories, 664 files)."
+    success "gitlab-adm ownership and symlinks configured (${real_cfg}; 775 dirs, 664 files)."
 }
 
 # =============================================================================
@@ -5251,6 +5297,292 @@ EOF
     fi
 
     success "Restricted sudoers for gitlab-adm configured successfully."
+}
+
+# =============================================================================
+# lpu_detect_home() - Detect system-user home from passwd (auto)
+# =============================================================================
+# Prints home directory for $1 from getent/passwd, or empty if unknown.
+# Used by F7 remove path — do not hardcode home for deletion.
+# =============================================================================
+
+lpu_detect_home() {
+    local user="${1-}"
+    [ -n "${user}" ] || return 0
+    if command -v getent >/dev/null 2>&1; then
+        getent passwd "${user}" 2>/dev/null | cut -d: -f6
+        return 0
+    fi
+    if [ -r /etc/passwd ]; then
+        awk -F: -v u="${user}" '$1==u {print $6; exit}' /etc/passwd 2>/dev/null
+    fi
+}
+
+# =============================================================================
+# lpu_userdel_r() - Remove LPU account; home via userdel -r (auto)
+# =============================================================================
+# F7 law: remove path does NOT manually rm home — userdel -r removes it.
+# Fallback: userdel -rf, then userdel without -r if still needed.
+# =============================================================================
+
+lpu_userdel_r() {
+    local user="${1-}"
+    [ -n "${user}" ] || return 0
+    if ! id "${user}" >/dev/null 2>&1; then
+        info "User ${user} does not exist."
+        return 0
+    fi
+    local home_before
+    home_before=$(lpu_detect_home "${user}")
+    if [ -n "${home_before}" ]; then
+        info "Detected ${user} home (auto): ${home_before} — will be removed by userdel -r."
+    fi
+    if userdel -r "${user}" 2>/dev/null; then
+        info "Removed user ${user} with userdel -r (home auto-removed)."
+    elif userdel -rf "${user}" 2>/dev/null; then
+        info "Removed user ${user} with userdel -rf (home auto-removed)."
+    elif userdel "${user}" 2>/dev/null || userdel -f "${user}" 2>/dev/null; then
+        warn "Removed user ${user} without -r (home may remain: ${home_before:-unknown})."
+    else
+        warn "Could not userdel ${user}."
+    fi
+    if getent group "${user}" >/dev/null 2>&1; then
+        groupdel "${user}" 2>/dev/null || true
+        info "Removed group ${user}."
+    fi
+}
+
+# =============================================================================
+# remove_nginx_adm_least_privilege() - F7 teardown for user-nginx-adm
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF nginx-adm LEAST-PRIVILEGE MODEL (remove path)
+#
+# Terminology SSOT: docs/terminologies/user-nginx-adm.md § Remove steps (F7)
+# Order (safe):
+#   1) sudoers fragment
+#   2) reverse affected conf ownership (${NGINX_CONF_ROOT} — not home)
+#   3) userdel -r (+ groupdel) — home detected auto, removed by -r
+#
+# Does NOT: manually rm home; delete ${NGINX_CONF_ROOT} contents.
+# Requires root. Call after operator confirm at orchestrator level.
+# =============================================================================
+
+remove_nginx_adm_least_privilege() {
+    check_root
+    : "${NGINX_CONF_ROOT:=/etc/nginx}"
+    detect_nginx_platform_paths 2>/dev/null || true
+    : "${NGINX_CONF_ROOT:=/etc/nginx}"
+
+    local sudoers_file="/etc/sudoers.d/nginx-adm"
+    local backup_dir="/etc/sudoers.bak"
+    local today
+    today=$(date +%Y%m%d 2>/dev/null || echo "00000000")
+
+    info "Removing nginx-adm least-privilege artifacts (F7)..."
+
+    # 1) Sudoers fragment (backup then remove)
+    if [ -f "${sudoers_file}" ]; then
+        mkdir -p "${backup_dir}" 2>/dev/null || true
+        local count=1
+        while [ -f "${backup_dir}/nginx-adm.${today}-${count}.bak" ]; do
+            count=$((count + 1))
+        done
+        cp -a "${sudoers_file}" "${backup_dir}/nginx-adm.${today}-${count}.bak" 2>/dev/null || true
+        rm -f "${sudoers_file}" 2>/dev/null || true
+        info "Removed ${sudoers_file} (backup under ${backup_dir})."
+    else
+        info "No ${sudoers_file} present."
+    fi
+
+    # 2) Reverse affected-folder ownership (conf root only — never home)
+    if [ -d "${NGINX_CONF_ROOT}" ]; then
+        if id "nginx-adm" >/dev/null 2>&1; then
+            if [ "$(stat -c '%U' "${NGINX_CONF_ROOT}" 2>/dev/null || stat -f '%Su' "${NGINX_CONF_ROOT}" 2>/dev/null || echo "")" = "nginx-adm" ] \
+                || find "${NGINX_CONF_ROOT}" -maxdepth 0 -user nginx-adm >/dev/null 2>&1; then
+                chown -R root:root "${NGINX_CONF_ROOT}" 2>/dev/null || true
+                info "Reversed ownership on affected folder ${NGINX_CONF_ROOT} → root:root."
+            else
+                info "Skip conf chown: ${NGINX_CONF_ROOT} not owned by nginx-adm (stay-honest)."
+            fi
+        else
+            chown -R root:root "${NGINX_CONF_ROOT}" 2>/dev/null || true
+            info "Best-effort ownership reverse on ${NGINX_CONF_ROOT}."
+        fi
+    fi
+
+    # 3) Account + home via userdel -r (home auto-detected from passwd)
+    lpu_userdel_r "nginx-adm"
+
+    success "nginx-adm least-privilege remove steps completed."
+}
+
+# =============================================================================
+# remove_gitlab_adm_least_privilege() - F7 teardown for user-gitlab-adm
+# =============================================================================
+#
+# CRITICAL FUNCTION - PART OF gitlab-adm LEAST-PRIVILEGE MODEL (remove path)
+#
+# Terminology SSOT: docs/terminologies/user-gitlab-adm.md § Remove steps (F7)
+# Order (safe):
+#   1) sudoers
+#   2) restore /etc/gitlab from symlink (preserve config OUT of home before -r)
+#   3) reverse ownership on restored /etc/gitlab
+#   4) userdel -r (+ groupdel) — home auto-detected, removed by -r
+#
+# Does NOT: manually rm home; uninstall Omnibus packages; wipe /var/opt/gitlab.
+# Requires root. Call after operator confirm at orchestrator level.
+# =============================================================================
+
+remove_gitlab_adm_least_privilege() {
+    check_root
+
+    local etc_gitlab="/etc/gitlab"
+    local sudoers_file="/etc/sudoers.d/gitlab-adm"
+    local backup_dir="/etc/sudoers.bak"
+    local today
+    today=$(date +%Y%m%d 2>/dev/null || echo "00000000")
+
+    # Detect home from passwd (preferred) — do not hardcode for removal
+    local home_dir
+    home_dir=$(lpu_detect_home "gitlab-adm")
+    local real_cfg=""
+    if [ -n "${home_dir}" ]; then
+        real_cfg="${home_dir}/gitlab"
+        info "Detected gitlab-adm home (auto): ${home_dir}"
+    else
+        info "gitlab-adm home not in passwd yet (user may already be absent)."
+    fi
+
+    info "Removing gitlab-adm least-privilege artifacts (F7)..."
+
+    # 1) Sudoers fragment
+    if [ -f "${sudoers_file}" ]; then
+        mkdir -p "${backup_dir}" 2>/dev/null || true
+        local count=1
+        while [ -f "${backup_dir}/gitlab-adm.${today}-${count}.bak" ]; do
+            count=$((count + 1))
+        done
+        cp -a "${sudoers_file}" "${backup_dir}/gitlab-adm.${today}-${count}.bak" 2>/dev/null || true
+        rm -f "${sudoers_file}" 2>/dev/null || true
+        info "Removed ${sudoers_file} (backup under ${backup_dir})."
+    else
+        info "No ${sudoers_file} present."
+    fi
+
+    # 2) Restore /etc/gitlab as a real directory if it is a symlink into operator home
+    #    (must run BEFORE userdel -r so config is not deleted with home)
+    if [ -L "${etc_gitlab}" ]; then
+        local target
+        target=$(readlink "${etc_gitlab}" 2>/dev/null || true)
+        local restore=0
+        if [ -n "${home_dir}" ] && [ -n "${target}" ]; then
+            case "${target}" in
+                "${home_dir}"|"${home_dir}/"*|"${home_dir}/gitlab"|"${home_dir}/gitlab/") restore=1 ;;
+            esac
+        fi
+        # Also accept known create paths if passwd already gone
+        case "${target}" in
+            /etc/gitlab-adm/gitlab|/etc/gitlab-adm/gitlab/|/home/gitlab-adm/gitlab|/home/gitlab-adm/gitlab/) restore=1 ;;
+        esac
+        if [ "${restore}" -eq 1 ]; then
+            info "Restoring ${etc_gitlab} from symlink → ${target} (preserve config before userdel -r)."
+            rm -f "${etc_gitlab}" 2>/dev/null || true
+            if [ -d "${target}" ]; then
+                if mv "${target}" "${etc_gitlab}" 2>/dev/null; then
+                    info "Moved ${target} → ${etc_gitlab}."
+                else
+                    mkdir -p "${etc_gitlab}" 2>/dev/null || true
+                    cp -a "${target}/." "${etc_gitlab}/" 2>/dev/null || true
+                    info "Copied ${target} → ${etc_gitlab}."
+                fi
+            else
+                mkdir -p "${etc_gitlab}" 2>/dev/null || true
+                warn "Symlink target missing; created empty ${etc_gitlab}."
+            fi
+        else
+            warn "Unexpected ${etc_gitlab} symlink target (${target}); not auto-restoring."
+        fi
+    elif [ -n "${real_cfg}" ] && [ -d "${real_cfg}" ] && [ ! -e "${etc_gitlab}" ]; then
+        mv "${real_cfg}" "${etc_gitlab}" 2>/dev/null \
+            || { mkdir -p "${etc_gitlab}" 2>/dev/null || true; cp -a "${real_cfg}/." "${etc_gitlab}/" 2>/dev/null || true; }
+        info "Promoted ${real_cfg} to ${etc_gitlab} before userdel -r."
+    fi
+
+    # 3) Reverse ownership on affected /etc/gitlab when present as real dir
+    if [ -d "${etc_gitlab}" ] && [ ! -L "${etc_gitlab}" ]; then
+        chown -R root:root "${etc_gitlab}" 2>/dev/null || true
+        info "Set ${etc_gitlab} ownership → root:root."
+    fi
+
+    # 4) Account + home via userdel -r (home auto from passwd; no manual rm home)
+    lpu_userdel_r "gitlab-adm"
+
+    success "gitlab-adm least-privilege remove steps completed."
+}
+
+# =============================================================================
+# remove_least_privilege_operators() - Orchestrate F7 for nginx and/or gitlab
+# =============================================================================
+#
+# Target: nginx | gitlab | all (default all)
+# Confirm unless FORCE=1. Root required.
+# =============================================================================
+
+remove_least_privilege_operators() {
+    check_root
+    : "${LPU_REMOVE_TARGET:=all}"
+    : "${FORCE:=0}"
+    : "${FORCE_REINSTALL:=0}"
+    if [ "${FORCE}" -eq 1 ]; then
+        FORCE_REINSTALL=1
+    fi
+
+    local target
+    target=$(printf '%s' "${LPU_REMOVE_TARGET}" | tr '[:upper:]' '[:lower:]')
+    case "${target}" in
+        nginx|nginx-adm) target="nginx" ;;
+        gitlab|gitlab-adm) target="gitlab" ;;
+        all|both|"") target="all" ;;
+        *)
+            die "Unknown remove-lpu target: ${LPU_REMOVE_TARGET}. Use nginx, gitlab, or all."
+            ;;
+    esac
+
+    info "Least-privilege remove target: ${target}"
+    warn "This reverses operator accounts, sudoers, and ownership — not self-uninstall of the CLI."
+    if [ "${target}" = "gitlab" ] || [ "${target}" = "all" ]; then
+        warn "GitLab path will try to restore /etc/gitlab as a real directory before removing gitlab-adm."
+    fi
+
+    if [ "${FORCE_REINSTALL:-0}" -eq 0 ] && [ "${FORCE:-0}" -eq 0 ]; then
+        if [ "${TTY:-0}" -eq 1 ]; then
+            if ! prompt_yes_no "Proceed with remove-lpu (${target})?"; then
+                die "Aborted by operator."
+            fi
+        else
+            die "Non-interactive remove-lpu requires --force. Re-run: sudo ${APP_NAME} remove-lpu ${target} --force"
+        fi
+    fi
+
+    case "${target}" in
+        nginx)
+            remove_nginx_adm_least_privilege
+            ;;
+        gitlab)
+            remove_gitlab_adm_least_privilege
+            ;;
+        all)
+            remove_nginx_adm_least_privilege
+            remove_gitlab_adm_least_privilege
+            ;;
+    esac
+
+    if [ "${JSON}" -eq 1 ]; then
+        out_json "success" "remove-lpu completed" "target" "${target}"
+    else
+        success "remove-lpu (${target}) finished."
+    fi
 }
 
 # =============================================================================
@@ -5429,7 +5761,7 @@ app_help() {
     if [ "${JSON}" -eq 1 ]; then
         out_json "success" "Help text available in human-readable mode. Run without --json." \
             "command" "help" \
-            "note" "Use --json with version, about, version-check, install, self-update, self-uninstall, domains, email, nginx-conf, run."
+            "note" "Use --json with version, about, version-check, install, self-update, self-uninstall, domains, email, nginx-conf, run, remove-lpu."
         return 0
     fi
     if [ "${QUIET}" -eq 1 ]; then
@@ -5448,6 +5780,9 @@ app_help() {
     out_plain "  email                Show saved Let's Encrypt email"
     out_plain "  ssh-hostname         Show/set GitLab SSH hostname"
     out_plain "  nginx-conf           Regenerate external Nginx configuration only"
+    out_plain "  remove-lpu [target]  Remove LPU operators (nginx|gitlab|all); needs root"
+    out_plain "  remove-nginx-adm     Alias: remove-lpu nginx"
+    out_plain "  remove-gitlab-adm    Alias: remove-lpu gitlab"
     out_empty_line
     out_info "Self-Management (Type 0 - any user):"
     out_plain "  install              Install ${APP_NAME} (root→global, user→~/.local/bin)"
@@ -5491,6 +5826,7 @@ app_main() {
     : "${FORCE:=0}"
     : "${FORCE_REINSTALL:=0}"
     : "${USE_CLOUDFLARE:=1}"
+    : "${LPU_REMOVE_TARGET:=all}"
 
     : "${USERNAME:=unknown}"
     : "${HOME:=/tmp}"
@@ -5527,6 +5863,24 @@ app_main() {
             run|setup|domains|email|ssh-hostname|nginx-conf)
                 COMMAND="$1"
                 ;;
+            remove-lpu)
+                COMMAND="remove-lpu"
+                ;;
+            remove-nginx-adm)
+                COMMAND="remove-lpu"
+                LPU_REMOVE_TARGET="nginx"
+                ;;
+            remove-gitlab-adm)
+                COMMAND="remove-lpu"
+                LPU_REMOVE_TARGET="gitlab"
+                ;;
+            nginx|nginx-adm|gitlab|gitlab-adm|all|both)
+                if [ "${COMMAND}" = "remove-lpu" ]; then
+                    LPU_REMOVE_TARGET="$1"
+                else
+                    out_die "Unknown command or flag: $1. See '${APP_NAME} help'."
+                fi
+                ;;
             *)
                 out_die "Unknown command or flag: $1. See '${APP_NAME} help'."
                 ;;
@@ -5534,7 +5888,7 @@ app_main() {
         shift
     done
 
-    out_debug "dispatch command=${COMMAND} quiet=${QUIET} json=${JSON} force=${FORCE} cloudflare=${USE_CLOUDFLARE}"
+    out_debug "dispatch command=${COMMAND} quiet=${QUIET} json=${JSON} force=${FORCE} cloudflare=${USE_CLOUDFLARE} lpu_target=${LPU_REMOVE_TARGET}"
 
     case "${COMMAND}" in
         version) app_version ;;
@@ -5573,6 +5927,9 @@ app_main() {
             backup_nginx_sites_configs
             deploy_domain_nginx_configs "$domains" "$main_domain"
             info "Nginx configs regenerated using main domain: ${main_domain}"
+            ;;
+        remove-lpu)
+            remove_least_privilege_operators
             ;;
         help|*) app_help ;;
     esac

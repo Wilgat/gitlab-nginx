@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| **2.3.1** (current) | Yes — full support |
-| **2.3.0** | Superseded; upgrade to current when possible |
-| **2.2.x** | Security fixes only; upgrade recommended after specialize re-base |
-| Older | Best-effort only; upgrade recommended |
+| **2.5.1** (current) | Yes — full support |
+| **2.5.0** / **2.4.x** | Superseded; upgrade to current when possible |
+| **2.3.x** | Security fixes only; upgrade recommended |
+| **2.2.x** and older | Best-effort only; upgrade recommended |
 
 ## Reporting a Vulnerability
 
@@ -29,7 +29,7 @@ This project follows **[CIAO](https://github.com/cloudgen/ciao)** / **CIAO-Lite*
 | Letter | Principle | Security application |
 |--------|-----------|----------------------|
 | **C** | **Caution** | Assume hostile input, hostile networks, and misconfiguration. Validate install paths and privilege boundaries; fail closed on integrity **mismatch** when a companion digest is present. Domain host setup requires root deliberately. |
-| **I** | **Intentional** | Type 0 self-management, channel URL (`SCRIPT_URL`), automatic companion-checksum, and domain verbs (`run`, `nginx-conf`, …) are deliberate. Prefer clear “why” over silent magic. |
+| **I** | **Intentional** | Type 0 self-management, channel URL (`SCRIPT_URL`), automatic companion-checksum, and domain verbs (`run`, `nginx-conf`, `remove-lpu`, …) are deliberate. Prefer clear “why” over silent magic. |
 | **A** | **Anti-fragile** | Survive harsh environments (minimal containers, non-interactive `curl \| sh`). Prefer transparent automatic SHA-256 sidecar checks, least privilege for day-to-day CLI use, and recoverable failure over brittle trust. |
 | **O** | **Over-protect** | Defense in depth on critical paths (integrity verify before install/update when designed, dual least-privilege `nginx-adm` / `gitlab-adm` models, loud failure). Do not “simplify away” safety for brevity. |
 
@@ -56,7 +56,7 @@ CHECKSUM=<sha256-of-script> curl -fsSL https://raw.githubusercontent.com/Wilgat/
 
 ## Domain / host setup privilege
 
-Commands that mutate the host (`run`, `nginx-conf`, `ssh-hostname`, and related paths) **require root**. Non-root invocation must fail closed (not partially reconfigure the system). Type 0 lifecycle (`install`, `version`, `about`, `self-update`, `self-uninstall`) remains usable without root for user-local installs.
+Commands that mutate the host (`run`, `nginx-conf`, `ssh-hostname`, `remove-lpu`, and related paths) **require root**. Non-root invocation must fail closed (not partially reconfigure the system). Type 0 lifecycle (`install`, `version`, `about`, `self-update`, `self-uninstall`) remains usable without root for user-local installs. `remove-lpu` is **not** Type 0 self-uninstall (CLI binary only).
 
 ## Scope notes
 

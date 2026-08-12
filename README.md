@@ -1,6 +1,6 @@
 # GitLab + External Nginx + Let's Encrypt Setup Script
 
-[![Version](https://img.shields.io/badge/Version-2.3.1-blue?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
+[![Version](https://img.shields.io/badge/Version-2.5.1-blue?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Philosophy](https://img.shields.io/badge/Philosophy-CIAO%20(Caution%20%E2%80%A2%20Intentional%20%E2%80%A2%20Anti--fragile%20%E2%80%A2%20Over--engineered)-purple.svg)](https://github.com/cloudgen/ciao)
 [![Shell](https://img.shields.io/badge/Shell-POSIX%20sh-orange?style=flat-square)]()
@@ -16,7 +16,7 @@ Designed for security-conscious users who want full control over Nginx (custom c
 
 This project is built using [CIAO](https://github.com/cloudgen/ciao) (Caution • Intentionality • Anti-fragility • Over-engineered).
 
-**Architecture (2.3.0+):** specialized from [selfmanaged](https://github.com/cloudgen/selfmanaged) Type 0 bootstrap (install / version-check / self-update / self-uninstall) plus GitLab/Nginx domain commands (, , , , ).
+**Architecture (2.3.0+):** specialized from [selfmanaged](https://github.com/cloudgen/selfmanaged) Type 0 bootstrap (install / version-check / self-update / self-uninstall) plus GitLab/Nginx domain commands (`run`, `domains`, `email`, `nginx-conf`, `ssh-hostname`, `remove-lpu`).
 
 ---
 
@@ -30,7 +30,7 @@ I like this project.
 
 ### What I Appreciate Most
 
-- **Dual Least-Privilege Model**: The introduction of both `nginx-adm` (for external Nginx) and `gitlab-adm` (UID/GID 1888, with proper symlink from `/etc/gitlab` to `/home/gitlab-adm/gitlab`, 775/664 permissions, and restricted sudoers for `gitlab-ctl`) is excellent. You’ve significantly reduced ongoing root dependency after the initial setup — this is rare and commendable.
+- **Dual Least-Privilege Model**: The introduction of both `nginx-adm` (for external Nginx) and `gitlab-adm` (UID/GID 1888, home `/etc/gitlab-adm`, real config under `/etc/gitlab-adm/gitlab` with `/etc/gitlab` symlink, 775/664 permissions, and restricted sudoers for `gitlab-ctl`) is excellent. You’ve significantly reduced ongoing root dependency after the initial setup — this is rare and commendable.
 
 - **Smart Cloudflare Handling**: The explicit separation of the main web domain (used for HTTPS + `external_url`) from the SSH hostname, combined with clear client-side `~/.ssh/config` instructions, directly solves the common Cloudflare port 22 limitation in a clean, user-friendly way.
 
@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-ngi
 ### Secure installation with checksum verification (v2 – strongly recommended)
 ```bash
 # Verify download cryptographically before running
-CHECKSUM=1a328412794eafdd02d2933e92c6464bd61971b4b0527a5db0edebd73af37e50 \
+CHECKSUM=0fc73f7e48bea92de7c3ccd760ecfbf390cdcb38f07bfdac13884847bf9d8f11 \
   curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx | sh
 ```
 
@@ -88,7 +88,8 @@ sudo gitlab-nginx run
 
 - **Self-installing** with full non-root support (`~/.local/bin`) and global root install
 - **Self-install v2 checksum verification** (explicit `CHECKSUM=` or automatic `.sha256`)
-- **Dual least-privilege model**: `nginx-adm` + `gitlab-adm`
+- **Dual least-privilege model**: `nginx-adm` + `gitlab-adm` (homes under `/etc/…`, shell `/bin/bash`)
+- **`remove-lpu`**: teardown LPU operators (`userdel -r`; not Type 0 self-uninstall)
 - **External Nginx** mode with full control (Cloudflare-friendly)
 - **Let's Encrypt SSL** via standalone mode (before any service starts)
 - **Smart domain & SSH hostname handling** (separate SSH hostname for Cloudflare port 22)
@@ -119,6 +120,7 @@ sudo gitlab-nginx run
 | `sudo gitlab-nginx domains`      | Show saved domains                                       |
 | `sudo gitlab-nginx email`        | Show saved Let's Encrypt email                           |
 | `sudo gitlab-nginx ssh-hostname` | GitLab SSH hostname (Cloudflare-friendly)                |
+| `sudo gitlab-nginx remove-lpu`   | Remove LPU operators (`nginx`\|`gitlab`\|`all`; root)    |
 | `gitlab-nginx about`             | Diagnostics (Type 0 + domain)                            |
 | `gitlab-nginx version-check`     | Compare local vs remote                                  |
 | `gitlab-nginx self-update`       | Update CLI from channel                                  |

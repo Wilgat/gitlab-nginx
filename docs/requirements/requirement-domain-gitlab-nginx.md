@@ -48,6 +48,7 @@ Domain verbs **MUST** be stable unless this requirement is explicitly revised. D
 | `email` | invoker (read) | `show_email` | `--json` | Show saved Let's Encrypt email from `EMAIL_FILE` | missing/unreadable → status/warn |
 | `ssh-hostname` | root | `get_or_set_gitlab_ssh_hostname` | `--json` | Show or set GitLab SSH hostname (Cloudflare port-22 split) | not root → fail |
 | `nginx-conf` | root | `deploy_domain_nginx_configs` (+ backups) | `--json` / `--no-cloudflare` | Regenerate external Nginx configs from saved domains | no domains → fail; nginx -t fail → fail |
+| `remove-lpu` | root | `remove_least_privilege_operators` → `remove_*_adm_least_privilege` + `lpu_userdel_r` / `lpu_detect_home` | optional target `nginx` \| `gitlab` \| `all` (default `all`); global `--force` | Teardown dual LPU operators per F7: sudoers backup+remove; reverse **affected** ownership / restore `/etc/gitlab` from symlink **before** account delete; **`userdel -r`** (home **auto-detected** from passwd — **no** manual home-path rm). **Does not** uninstall Omnibus packages, wipe `/var/opt/gitlab`, or delete `${NGINX_CONF_ROOT}` site content. Aliases: `remove-nginx-adm`, `remove-gitlab-adm` | not root → fail; non-TTY without `--force` → fail; unknown target → fail |
 
 **Dispatch rules:**
 
@@ -55,7 +56,8 @@ Domain verbs **MUST** be stable unless this requirement is explicitly revised. D
 2. Empty argv **MUST NOT** run domain setup — empty argv is Type O install-ensure (**RQ-SHELL-CLI-ZERO-ARGUMENTS**). Full setup is **`run` / `setup`**.  
 3. Flag `--no-cloudflare` **MUST** set `USE_CLOUDFLARE=0` for config generation paths.  
 4. All user-facing domain messages **MUST** go through centralized `out_*` (directly or via documented shims `info`/`success`/`die`/`output_json` → `out_*`).  
-5. Type 0 routes (`install`, `version`, `about`, `version-check`, `self-update`, `self-uninstall`, `help`) **MUST** remain available after domain specialization.
+5. Type 0 routes (`install`, `version`, `about`, `version-check`, `self-update`, `self-uninstall`, `help`) **MUST** remain available after domain specialization.  
+6. **`remove-lpu` is not** Type 0 `self-uninstall` — self-uninstall removes only the CLI binary; remove-lpu reverses host LPU operators.
 
 ### 2.2 Specialized features (normative)
 
@@ -78,7 +80,7 @@ The interactive path **MUST** preserve the defensive order:
 5. Obtain certificates (standalone) **before** GitLab external_url finalize  
 6. Install GitLab CE (Omnibus)  
 7. Stop GitLab early; configure `gitlab.rb` with external nginx mode  
-8. Dual least-privilege: **nginx-adm** + **gitlab-adm** (UID/GID 1888 model as implemented)  
+8. Dual least-privilege: **nginx-adm** (home `/etc/nginx-adm`, shell `/bin/bash`) + **gitlab-adm** (UID/GID 1888, home `/etc/gitlab-adm`, shell `/bin/bash`, real config `/etc/gitlab-adm/gitlab`, `/etc/gitlab` symlink; migrate legacy `/home/gitlab-adm` on setup)  
 9. Deploy external Nginx GitLab proxy configs  
 10. Client SSH config guidance for Cloudflare port 22  
 
@@ -108,6 +110,7 @@ Non-interactive `run` **MUST NOT** claim full setup success; it may install pack
 - `email`  
 - `ssh-hostname`  
 - `nginx-conf`  
+- `remove-lpu` / `remove-nginx-adm` / `remove-gitlab-adm`  
 - `--no-cloudflare`  
 
 Plus full Type 0 self-management table.
