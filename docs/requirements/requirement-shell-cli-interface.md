@@ -106,7 +106,7 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 | **Primary executable** | Repo root `./gitlab-nginx` (POSIX `/bin/sh`, single-file for `curl \| sh`) |
 | **Dispatcher** | `app_main` (always invoked at end of script: `app_main "$@"` — no `${0##*/}` / APP_NAME basename gate; required for `curl \| sh`) |
 | **Output SSOT** | `out_text` + wrappers (`out_info`, `out_success`, `out_warn`, `out_error`, `out_die`, `out_plain`, `out_json`, …) |
-| **Version SSOT** | `VERSION` hard-assign in script config block (`VERSION="2.5.2"`) |
+| **Version SSOT** | `VERSION` hard-assign in script config block (`VERSION="2.5.3"`) |
 | **Install paths** | Global: `GLOBAL_BIN` default `/usr/local/bin`; User: `USER_BIN` default `${HOME}/.local/bin` |
 | **Remote channel env (help surface)** | `REPO_USER` / `REPO_NAME` (defaults `Wilgat` / `gitlab-nginx`); `SCRIPT_URL` composed default `https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${APP_NAME}` (literal product default: `https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx`; override via env). **`help` / `about` MUST list these operator channel vars as designed — MUST NOT list `CHECKSUM`** (install-path runtime pin only; see `requirement-shell-automatic-checksum.md`) |
 | **Admin-privilege commands** | Named here; **owned** by `requirement-domain-gitlab-nginx`: `run`, `nginx-conf`, `ssh-hostname`, `remove-lpu` |
@@ -124,7 +124,7 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 | `version-check` | Type 0 | `ver_check` | Compare local vs remote `VERSION` from `SCRIPT_URL`; fail clearly if URL unset/unreachable |
 | `self-update` | Type 0 | `inst_self_update` | Fetch remote version; reinstall when policy allows; reuse install primitives |
 | `self-uninstall` | Type 0 | `inst_self_uninstall` | Remove managed binary; PATH cleanup only if `~/.local/bin` empty (user installs) |
-| `help` | Type 0 | `app_help` | Full usage in human mode; short JSON note in JSON mode; Environment lists channel vars only — **not** `CHECKSUM` |
+| `help` | Type 0 | `app_help` (live SSOT; `show_gitlab_nginx_help` is alias only — **MUST NOT** keep a second catalog) | Full usage in human mode; lists `setup` as alias of `run`; domain **read** (`domains`/`email`) separate from domain **setup** (root); short JSON note in JSON mode; Environment lists channel vars only — **not** `CHECKSUM` |
 | `run` (alias `setup`) | Admin (root) | `run_interactive_setup` / `run_non_interactive_setup` | Full GitLab+Nginx setup. **Topic-owner:** `requirement-domain-gitlab-nginx`. Sample: `sudo gitlab-nginx run` |
 | `domains` | Invoker (read) | `show_domains` | Show saved domains. **Topic-owner:** domain REQ. Sample: `gitlab-nginx domains` |
 | `email` | Invoker (read) | `show_email` | Show saved Let's Encrypt email. **Topic-owner:** domain REQ. Sample: `gitlab-nginx email` |
@@ -139,7 +139,7 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 | `--quiet`, `-q` | Set `QUIET=1` in `app_main` |
 | `--json` | Set `JSON=1` and `QUIET=1` in `app_main` |
 | `--debug` | Set `DEBUG=1` in `app_main` |
-| `--force` | Parsed by `app_main` → `FORCE=1` and `FORCE_REINSTALL=1`; used by install reinstall, self-update (incl. deliberate downgrade), and uninstall confirm skip |
+| `--force` | Parsed by `app_main` → `FORCE=1` and `FORCE_REINSTALL=1`; used by install reinstall, self-update (incl. deliberate downgrade), and uninstall confirm skip. **`--reset` and `--reinstall` are the same as `--force`** and **MUST** be listed in help |
 
 #### Dispatcher acceptance criteria (this project)
 
@@ -191,6 +191,7 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 5. Break the contract that `--json` implies quiet and machine-oriented output.  
 6. Drop zero-arg install-ensure for the classic `curl | sh` path (including already-installed success no-op) without an explicit requirement change (`requirement-shell-cli-zero-arguments.md`).  
 7. Document flags in help that the dispatcher does not parse (or leave `--force` documented-only).  
+7b. Keep a second help catalog (`show_gitlab_nginx_help` or `cat <<EOF` usage text) that lists foreign verbs (`status`, Java/Maven, timer) or omits live domain rows.  
 8. Invent a dedicated system user as mandatory for Type 0 CLI self-management without a specialized architecture requirement.
 
 **Violating this rule is a critical CLI interface regression.**

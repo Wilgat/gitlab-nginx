@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.3] - 2026-09-06
+
+### Fixed
+- **Live help SSOT is `app_help`:** leftover `show_gitlab_nginx_help` no longer prints a foreign Java/Maven/timer catalog; it is a compatibility alias only.
+- **Help matches dispatcher:** `setup` listed as alias of `run`; `domains`/`email` listed as read (any login); root-only domain verbs grouped separately; `--reset` / `--reinstall` listed as `--force`; JSON help note includes `ssh-hostname` and `setup`.
+- Stale `VERSION:=2.3.1` fallbacks in `app_about` / `app_version` aligned with Config `VERSION`.
+
 ## [2.5.2] - 2026-09-06
 
 ### Added

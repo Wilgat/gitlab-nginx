@@ -5,12 +5,12 @@ Maps **portable TP families** (proof molds) and product domain cases to product-
 | Field | Value |
 |-------|--------|
 | **Product** | gitlab-nginx |
-| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.2` |
+| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.3` |
 | **Companion** | `./gitlab-nginx.sha256` |
 | **Suite entry** | `./tests/run.sh` |
 | **Live law** | **13** Active REQs — `docs/requirements/index.md` |
 | **Bootstrap origin** | selfmanaged 1.2.1 (A→B specialize) |
-| **Last update** | 2026-09-06 (2.5.2: human-readable README/REQs; coding-style + sudo REQs; TP-GLN-11…13) |
+| **Last update** | 2026-09-06 (2.5.3: live `app_help` SSOT; setup alias; no foreign help catalog) |
 
 Status: **have** = automated · **todo** = needed · **n/a** = not applicable · **optional** = gated (root/host)
 
@@ -38,6 +38,7 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | 2026-08-11 | **PASS=133 FAIL=0 SKIP=0** | 2.3.1 + GLOBAL_BIN isolation + `check_root` on non-interactive run |
 | 2026-08-30 | **PASS=145 FAIL=0 SKIP=0** | Cache folder + persistence folder about fields (`RQ-SHELL-CLI-STORAGE` 1.1.0) |
 | 2026-09-06 | **PASS=154 FAIL=0 SKIP=0** | 2.5.2 human-facing law + TP-GLN-11…13 |
+| 2026-09-06 | **PASS=162 FAIL=0 SKIP=0** | 2.5.3 live `app_help`; setup alias; no foreign catalog |
 
 **How to re-baseline:** `cd` product root → `./tests/run.sh` → paste summary into this table when law/suite changes.
 
@@ -79,7 +80,7 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 
 | TP-ID | Intent | Status | Evidence |
 |-------|--------|--------|----------|
-| TP-GLN-01 | Help lists domain verbs + Type 0 | **have** | run/domains/email/nginx-conf/ssh-hostname/--no-cloudflare |
+| TP-GLN-01 | Help lists domain verbs + self-management; `setup` alias; no Java/timer catalog | **have** | run/setup/domains/email/nginx-conf/ssh-hostname/remove-lpu/--no-cloudflare |
 | TP-GLN-02 | Help --json notes domain | **have** | test_domain |
 | TP-GLN-03 | About domain fields | **have** | domains_file / email_file / domain_count |
 | TP-GLN-04 | Empty argv ≠ domain setup | **have** | Type O only; no certbot/GitLab text |

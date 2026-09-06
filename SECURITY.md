@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| **2.5.2** (current) | Yes — full support |
-| **2.5.1** / **2.5.0** / **2.4.x** | Superseded; upgrade to current when possible |
+| **2.5.3** (current) | Yes — full support |
+| **2.5.2** / **2.5.1** / **2.5.0** / **2.4.x** | Superseded; upgrade to current when possible |
 | **2.3.x** | Security fixes only; upgrade recommended |
 | **2.2.x** and older | Best-effort only; upgrade recommended |
 

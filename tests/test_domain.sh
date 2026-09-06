@@ -18,6 +18,7 @@ run_test_domain() {
     _ec=$?
     assert_eq "TP-GLN-01 help exit 0" 0 "$_ec"
     assert_contains "TP-GLN-01 help lists run" "$_out" "run"
+    assert_contains "TP-GLN-01 help lists setup as Alias: run" "$_out" "Alias: run"
     assert_contains "TP-GLN-01 help lists domains" "$_out" "domains"
     assert_contains "TP-GLN-01 help lists email" "$_out" "email"
     assert_contains "TP-GLN-01 help lists nginx-conf" "$_out" "nginx-conf"
@@ -26,6 +27,11 @@ run_test_domain() {
     assert_contains "TP-GLN-01 help lists --no-cloudflare" "$_out" "--no-cloudflare"
     assert_contains "TP-GLN-01 help still lists install" "$_out" "install"
     assert_contains "TP-GLN-01 help still lists self-update" "$_out" "self-update"
+    assert_not_contains "TP-GLN-01 help must not list Java" "$_out" "Java"
+    assert_not_contains "TP-GLN-01 help must not list Maven" "$_out" "Maven"
+    assert_not_contains "TP-GLN-01 help must not list timer uninstall" "$_out" "Remove timer"
+    assert_not_contains "TP-GLN-01 help must not list pom.xml" "$_out" "pom.xml"
+    assert_contains "TP-GLN-01 help lists --reset as --force" "$_out" "--reset"
 
     # --- TP-GLN-02: help --json mentions domain note surface ---
     _out=$(sh "${SCRIPT}" --json help 2>/dev/null)
@@ -33,6 +39,8 @@ run_test_domain() {
     assert_eq "TP-GLN-02 help --json exit 0" 0 "$_ec"
     assert_contains "TP-GLN-02 help --json success" "$_out" '"type":"success"'
     assert_contains "TP-GLN-02 help --json notes domains" "$_out" "domains"
+    assert_contains "TP-GLN-02 help --json notes ssh-hostname" "$_out" "ssh-hostname"
+    assert_contains "TP-GLN-02 help --json notes setup" "$_out" "setup"
 
     # --- TP-GLN-03: about JSON domain fields ---
     _out=$(sh "${SCRIPT}" --json about 2>/dev/null)

@@ -1,6 +1,6 @@
 # gitlab-nginx - GitLab CE with external Nginx and Let's Encrypt
 
-![Version](https://img.shields.io/badge/Version-2.5.2-blue?style=flat-square)
+![Version](https://img.shields.io/badge/Version-2.5.3-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 [![CIAO](https://img.shields.io/badge/Philosophy-CIAO%20(Caution%20%E2%80%A2%20Intentional%20%E2%80%A2%20Anti--fragile%20%E2%80%A2%20Over--engineered)-purple.svg)](https://github.com/cloudgen/ciao)
 [![Stars](https://img.shields.io/github/stars/Wilgat/gitlab-nginx?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
@@ -161,4 +161,4 @@ MIT License. See [LICENSE.md](LICENSE.md).
 
 ## Last Update
 
-2026-09-06 — **2.5.2**: human-readable product README (install vs GitLab setup, automatic checksum as primary); requirement human-facing blocks and coverage (coding-style, sudo allow table, dual-mention, tests).
+2026-09-06 — **2.5.3**: `help` is a single live catalog (`app_help`); `setup` alias listed; stale Java/timer help removed.

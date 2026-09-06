@@ -18,4 +18,4 @@ Maps live `RQ-*` to **TP** families. Status SSOT for individual TP-IDs: `reviews
 | `RQ-SHELL-SUDO-COMMAND` | requirement-shell-sudo-command | TP-GLN-07,08,12,13 | `tests/test_domain.sh` | Non-root fail-closed |
 | `RQ-DOMAIN-GITLAB-NGINX` | requirement-domain-gitlab-nginx | TP-GLN-01…13 | `tests/test_domain.sh` | 09–10 optional (host) |
 
-**Last update:** 2026-09-06 (2.5.2)
+**Last update:** 2026-09-06 (2.5.3)

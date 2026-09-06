@@ -48,8 +48,8 @@ APP_NAME="gitlab-nginx"
 : "${SHORT_DESCRIPTION:=${APP_DESC}}"
 : "${DESCRIPTION:=POSIX /bin/sh CLI you can install as yourself: install, version-check, self-update, self-uninstall, about, plus GitLab/Nginx domain setup (domain setup needs root).}"
 # Product version SSOT (semver). Extractors use: grep \'^VERSION="\'
-VERSION="2.5.2"
-: "${VERSION:=2.5.2}"
+VERSION="2.5.3"
+: "${VERSION:=2.5.3}"
 
 # Runtime flags (safe defaults)
 : "${QUIET:=0}"
@@ -2625,64 +2625,16 @@ show_system_diagnostics() {
 }
 
 # =============================================================================
-# show_gitlab_nginx_help() - Display help information for the app
+# show_gitlab_nginx_help() — compatibility alias (NOT a second catalog)
 # =============================================================================
 #
-# Shows usage, available commands, options, and important legacy notes.
-# Fully respects --quiet and --json modes.
-#
-# In --json mode: returns a minimal success object instead of long text.
-# In --quiet mode: prints nothing (silent).
-#
-# This is the user-facing help text and should be kept in sync with the README.md.
+# Live help SSOT is app_help() (dispatcher `help`). This name remains only so a
+# leftover call cannot print a stale foreign catalog (Java / Maven / timer).
+# MUST NOT duplicate command rows here. MUST NOT use raw cat/echo for help.
 # =============================================================================
 
 show_gitlab_nginx_help() {
-    if [ "${JSON}" -eq 1 ]; then
-        # JSON mode: return clean, machine-friendly response
-        output_json "success" "" \
-            "app" "${APP_NAME}" \
-            "version" "${VERSION}" \
-            "message" "Help text available in human mode. Run without --json." \
-            "note" "Use --json with status, about, version, etc. for machine output."
-        return 0
-    fi
-
-    if [ "${QUIET}" -eq 1 ]; then
-        # Quiet mode: suppress help completely
-        return 0
-    fi
-
-    cat << EOF
-${APP_NAME} v${VERSION} — ${DESCRIPTION}
-
-Usage:
-${APP_NAME}                          Setup environment + build + run (preserves project)
-${APP_NAME} status                   Show application status
-${APP_NAME} about                    Full diagnostics (Java, Maven, project, etc.)
-${APP_NAME} version                  Show version
-${APP_NAME} version-check            Compare with latest
-${APP_NAME} self-update              Update to latest version
-${APP_NAME} self-uninstall           Remove timer from the system
-${APP_NAME} reinstall                Force reinstall
-${APP_NAME} help                     This help
-${APP_NAME} domains                  Display current domains
-${APP_NAME} email                    Display current Let's Encrypt email
-${APP_NAME} nginx-conf               Re-generate only Nginx configuration files
-
-Options:
---quiet, -q            Suppress non-error messages
---json                 Machine-readable JSON output (implies --quiet) 
---no-cloudflare        Not using cloudflare
-
-Important Notes:
-• Normal run preserves your existing project files, pom.xml, and source code.
-
-Examples:
-${APP_NAME}                              # Normal run (recommended)
-${APP_NAME} about --json
-
-EOF
+    app_help
 }
 
 # =============================================================================
@@ -5705,7 +5657,7 @@ remove_least_privilege_operators() {
 # =============================================================================
 app_about() {
     : "${APP_NAME:=gitlab-nginx}"
-    : "${VERSION:=2.3.1}"
+    : "${VERSION:=2.5.3}"
     : "${JSON:=0}"
     : "${QUIET:=0}"
     : "${HOME:=/tmp}"
@@ -5798,7 +5750,7 @@ app_about() {
 
 app_version() {
     : "${APP_NAME:=gitlab-nginx}"
-    : "${VERSION:=2.3.1}"
+    : "${VERSION:=2.5.3}"
     : "${JSON:=0}"
     if [ "${JSON}" -eq 1 ]; then
         out_json "version" "" "app" "${APP_NAME}" "version" "${VERSION}"
@@ -5817,7 +5769,7 @@ app_help() {
     if [ "${JSON}" -eq 1 ]; then
         out_json "success" "Help text available in human-readable mode. Run without --json." \
             "command" "help" \
-            "note" "Use --json with version, about, version-check, install, self-update, self-uninstall, domains, email, nginx-conf, run, remove-lpu."
+            "note" "Use --json with version, about, version-check, install, self-update, self-uninstall, domains, email, ssh-hostname, nginx-conf, run, setup, remove-lpu."
         return 0
     fi
     if [ "${QUIET}" -eq 1 ]; then
@@ -5830,10 +5782,13 @@ app_help() {
     out_info "Usage:"
     out_plain "  ${APP_NAME} [command] [options]"
     out_empty_line
-    out_info "Domain commands (typically require root/sudo):"
-    out_plain "  run                  Full interactive setup (Certbot → Nginx → GitLab)"
+    out_info "Domain read (any login; files may be root-owned):"
     out_plain "  domains              Show saved domains"
     out_plain "  email                Show saved Let's Encrypt email"
+    out_empty_line
+    out_info "Domain setup (needs root):"
+    out_plain "  run                  Full interactive setup (Certbot → Nginx → GitLab)"
+    out_plain "  setup                Alias: run"
     out_plain "  ssh-hostname         Show/set GitLab SSH hostname"
     out_plain "  nginx-conf           Regenerate external Nginx configuration only"
     out_plain "  remove-lpu [target]  Remove dedicated nginx-adm / gitlab-adm accounts (nginx|gitlab|all); needs root"
@@ -5853,6 +5808,7 @@ app_help() {
     out_plain "  --quiet, -q          Suppress info/success (errors and warnings still shown)"
     out_plain "  --json               Machine-readable JSON (implies --quiet)"
     out_plain "  --force              Force reinstall / skip uninstall confirm / allow downgrade"
+    out_plain "  --reset, --reinstall Same as --force"
     out_plain "  --debug              Debug diagnostics on stderr"
     out_plain "  --no-cloudflare      Disable Cloudflare real-IP map in Nginx configs"
     out_empty_line
