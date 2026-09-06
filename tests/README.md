@@ -12,4 +12,4 @@
 ./tests/run.sh
 ```
 
-**Baseline:** see `../reviews/test-plan.md` (PASS=133).
+**Baseline:** see `../reviews/test-plan.md` (**PASS=154 FAIL=0 SKIP=0**, 2026-09-06).

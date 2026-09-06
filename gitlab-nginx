@@ -15,7 +15,7 @@
 # Project requirements (docs/requirements/ only — never cite templates here):
 # - requirement-shell-cli-interface.md
 # - requirement-shell-cli-zero-arguments.md  (Type O empty argv = install-ensure)
-# - requirement-shell-cli-storage.md         (util_resolve_storage + about fields)
+# - requirement-shell-cli-storage.md         (cache folder + persistence folder + about fields)
 # - requirement-shell-idempotency.md
 # - requirement-shell-self-management.md
 # - requirement-shell-modular-function-design.md
@@ -46,10 +46,10 @@ APP_NAME="gitlab-nginx"
 : "${APP_NAME:=gitlab-nginx}"
 : "${APP_DESC:=GitLab CE + external Nginx + Let's Encrypt setup}"
 : "${SHORT_DESCRIPTION:=${APP_DESC}}"
-: "${DESCRIPTION:=POSIX /bin/sh Type 0 CLI: install, version-check, self-update, self-uninstall, about, plus GitLab/Nginx domain setup.}"
+: "${DESCRIPTION:=POSIX /bin/sh CLI you can install as yourself: install, version-check, self-update, self-uninstall, about, plus GitLab/Nginx domain setup (domain setup needs root).}"
 # Product version SSOT (semver). Extractors use: grep \'^VERSION="\'
-VERSION="2.5.1"
-: "${VERSION:=2.5.1}"
+VERSION="2.5.2"
+: "${VERSION:=2.5.2}"
 
 # Runtime flags (safe defaults)
 : "${QUIET:=0}"
@@ -2068,6 +2068,56 @@ util_resolve_storage() {
     fi
     echo "${_storage_candidate}"
     unset _storage_candidate
+    return 0
+}
+
+# =============================================================================
+# Cache folder + persistence folder helpers (RQ-SHELL-CLI-STORAGE)
+# =============================================================================
+#
+# Storage is two classes:
+#   Cache folder       — volatile scratch (util_resolve_storage)
+#   Persistence folder — ${HOME}/.local/${APP_NAME} (not USER_BIN, not /var)
+#
+# ECHO EXCEPTION (class B – function return-via-stdout):
+# These helpers print paths for $(…) capture, not product UI. Failures use out_die.
+# See requirement-shell-cli-storage.md and requirement-shell-output-requirements.md §2.1.1.
+# =============================================================================
+
+util_preferred_cache_dir() {
+    : "${APP_NAME:=app}"
+    : "${USERNAME:=unknown}"
+    printf '%s' "/dev/shm/${APP_NAME}-${USERNAME}"
+}
+
+util_fallback_cache_dir() {
+    : "${APP_NAME:=app}"
+    : "${USERNAME:=unknown}"
+    : "${HOME:=/tmp}"
+    : "${XDG_CACHE_HOME:=${HOME}/.cache}"
+    printf '%s' "${XDG_CACHE_HOME}/${APP_NAME}-${USERNAME}"
+}
+
+util_persistent_storage_dir() {
+    : "${APP_NAME:=app}"
+    : "${HOME:=/tmp}"
+    printf '%s' "${HOME}/.local/${APP_NAME}"
+}
+
+util_resolve_persistent_storage() {
+    : "${APP_NAME:=app}"
+    : "${HOME:=/tmp}"
+    _persist=$(util_persistent_storage_dir)
+    case "${_persist}" in
+        */.local/bin|*/.local/bin/)
+            out_die "Persistence folder must not be the install bin directory ${_persist}"
+            ;;
+    esac
+    if ! mkdir -p "${_persist}" 2>/dev/null || [ ! -w "${_persist}" ]; then
+        out_die "Cannot create persistence folder ${_persist}"
+    fi
+    echo "${_persist}"
+    unset _persist
     return 0
 }
 
@@ -5664,6 +5714,7 @@ app_about() {
     : "${USER_BIN:=${HOME}/.local/bin}"
     : "${EFFECTIVE_STORAGE_DIR:=}"
     : "${STORAGE_DIR:=}"
+    : "${PERSISTENT_STORAGE_DIR:=}"
     : "${REPO_USER:=Wilgat}"
     : "${REPO_NAME:=gitlab-nginx}"
     : "${SCRIPT_URL:=}"
@@ -5705,6 +5756,9 @@ app_about() {
             "script_url" "${SCRIPT_URL}" \
             "effective_storage" "${EFFECTIVE_STORAGE_DIR}" \
             "storage_dir" "${STORAGE_DIR}" \
+            "cache_preferred" "$(util_preferred_cache_dir)" \
+            "cache_fallback" "$(util_fallback_cache_dir)" \
+            "persistence_storage" "${PERSISTENT_STORAGE_DIR}" \
             "domains_file" "${DOMAINS_FILE}" \
             "email_file" "${EMAIL_FILE}" \
             "domain_count" "${domain_count}" \
@@ -5722,7 +5776,9 @@ app_about() {
     out_plain "Shell:          ${shell_name}"
     out_plain "User:           ${USERNAME}"
     out_plain "Channel:        ${SCRIPT_URL}"
-    out_plain "Storage:        ${EFFECTIVE_STORAGE_DIR}"
+    out_plain "Cache folder (preferred): $(util_preferred_cache_dir)"
+    out_plain "Cache folder (fallback):  $(util_fallback_cache_dir)"
+    out_plain "Persistence folder:       ${PERSISTENT_STORAGE_DIR}"
     out_empty_line
     out_info "Domain (GitLab + external Nginx)"
     out_plain "Domains file:   ${DOMAINS_FILE} (count=${domain_count})"
@@ -5756,7 +5812,7 @@ app_version() {
 # =============================================================================
 app_help() {
     : "${SHORT_DESCRIPTION:=${APP_DESC:-GitLab CE + external Nginx + Let's Encrypt setup}}"
-    : "${DESCRIPTION:=POSIX /bin/sh Type 0 CLI: install, version-check, self-update, self-uninstall, about, plus GitLab/Nginx domain setup.}"
+    : "${DESCRIPTION:=POSIX /bin/sh CLI you can install as yourself: install, version-check, self-update, self-uninstall, about, plus GitLab/Nginx domain setup (domain setup needs root).}"
 
     if [ "${JSON}" -eq 1 ]; then
         out_json "success" "Help text available in human-readable mode. Run without --json." \
@@ -5780,14 +5836,14 @@ app_help() {
     out_plain "  email                Show saved Let's Encrypt email"
     out_plain "  ssh-hostname         Show/set GitLab SSH hostname"
     out_plain "  nginx-conf           Regenerate external Nginx configuration only"
-    out_plain "  remove-lpu [target]  Remove LPU operators (nginx|gitlab|all); needs root"
+    out_plain "  remove-lpu [target]  Remove dedicated nginx-adm / gitlab-adm accounts (nginx|gitlab|all); needs root"
     out_plain "  remove-nginx-adm     Alias: remove-lpu nginx"
     out_plain "  remove-gitlab-adm    Alias: remove-lpu gitlab"
     out_empty_line
-    out_info "Self-Management (Type 0 - any user):"
+    out_info "Self-management (any login, no root required):"
     out_plain "  install              Install ${APP_NAME} (root→global, user→~/.local/bin)"
     out_plain "  version              Show current version"
-    out_plain "  about                Show diagnostics (Type 0 + domain)"
+    out_plain "  about                Show diagnostics (install + domain folders)"
     out_plain "  version-check        Compare local vs remote version (needs SCRIPT_URL)"
     out_plain "  self-update          Update ${APP_NAME} to a newer remote version"
     out_plain "  self-uninstall       Remove ${APP_NAME} (safe PATH cleanup)"
@@ -5833,7 +5889,8 @@ app_main() {
     : "${XDG_CACHE_HOME:=${HOME}/.cache}"
     : "${STORAGE_DIR:=${XDG_CACHE_HOME}/${APP_NAME}-${USERNAME}}"
     EFFECTIVE_STORAGE_DIR=$(util_resolve_storage)
-    export EFFECTIVE_STORAGE_DIR STORAGE_DIR
+    PERSISTENT_STORAGE_DIR=$(util_resolve_persistent_storage)
+    export EFFECTIVE_STORAGE_DIR STORAGE_DIR PERSISTENT_STORAGE_DIR
     export TMPDIR="${EFFECTIVE_STORAGE_DIR}"
 
     # Type O empty argv = install-ensure (not domain run)

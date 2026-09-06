@@ -13,6 +13,30 @@ It defines lifecycle capabilities and safety rules for this shell project’s se
 
 **Must not confuse with:** OS package managers, domain product start/stop ops, dedicated system-user policy, or non-CLI “self-management.”
 
+### 1.1 Human-facing
+
+**In one sentence:** You can check, update, or remove **this program file** yourself — that does not install or uninstall GitLab.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | `version-check` / `self-update` / `self-uninstall` / `about` as yourself | `gitlab-nginx self-update` |
+| The other role | Channel host serving `SCRIPT_URL` | GitHub raw URL |
+| Not this file | `remove-lpu` (dedicated accounts) or Omnibus GitLab uninstall | domain requirement |
+
+| Includes | Excludes |
+|----------|----------|
+| `version-check`, `self-update`, `self-uninstall`, `about` | `apt remove gitlab-ce` |
+| Reuse of install primitives | Empty argv = help |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `gitlab-nginx about` | command | install + folder diagnostics |
+| `gitlab-nginx self-uninstall` | command | remove CLI binary |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Update the CLI | Fetches the channel, verifies digest, replaces the installed binary. GitLab on the host stays. | `gitlab-nginx self-update` |
+
 ---
 
 ## 2. Core Rules / Requirements (Mandatory)
@@ -112,7 +136,7 @@ Root may write global install path; non-root uses user path. Do not assume root 
 | **Uninstall steps** | `inst_self_uninstall_determine_bin` → `inst_self_uninstall_confirm_and_remove` → `inst_self_uninstall_cleanup_path` |
 | **PATH ensure** | `path_add_shell` / bash / zsh / fish helpers on user install |
 | **Privilege** | Type 0 only for self-management surface; no dedicated system user |
-| **Version SSOT** | `VERSION` default `1.2.1` in script config block (`VERSION="1.2.1"`) |
+| **Version SSOT** | `VERSION` hard-assign in script config block (`VERSION="2.5.2"`) |
 
 #### Normative acceptance behaviors (this project)
 
@@ -206,6 +230,21 @@ Work claiming self-management support for gitlab-nginx is **not done** if any of
 
 ---
 
-**Last Updated**: 2026-07-19  
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** `version-check` / `self-update` / `self-uninstall` / `about` remain available as yourself. Global (`/usr/local/bin`) install is unused without root; user-local install is the path.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-LC-04…09** | `tests/test_install_lifecycle.sh` | have |
+| **TP-CLI-09** | `tests/test_cli.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 3, 5, 10, 11, 14, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

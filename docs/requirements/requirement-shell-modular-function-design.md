@@ -13,6 +13,30 @@ It defines modular function organization for a **monolithic yet modular** single
 
 **Core idea:** Modularity is achieved through **clear function boundaries, consistent prefixes, and full CIAO documentation** — **not** by splitting the main CLI into multiple shipped files.
 
+### 1.1 Human-facing
+
+**In one sentence:** The program people install is **one file**, internally split by prefixes (`out_`, `inst_`, `app_`, `util_`) so edits stay surgical.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | You still `curl \| sh` one script | `./gitlab-nginx` |
+| The other role | Coding-style REQ owns POSIX/`set -u` lessons | `requirement-shell-script-coding` |
+| Not this file | Splitting into many shipped files for the one-liner | not claimed |
+
+| Includes | Excludes |
+|----------|----------|
+| Prefix table; Protection Zones; single ship unit | Replacing prefixes with bare `main`/`help` |
+| Domain helpers may keep historical names until retargeted | Multi-file runtime without a pack step |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `./gitlab-nginx` | program file | live prefixes |
+| `gitlab-nginx help` | command | `app_help` |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Add a helper | Give it a prefix, a header, and defaults. Do not invent a second ship file. | edit `./gitlab-nginx` |
+
 ---
 
 ## 2. Core Rules / Requirements (Mandatory)
@@ -38,7 +62,7 @@ Optional multi-file layout under `src/` for future authoring **MAY** exist only 
 |--------|----------|---------|-------------------|
 | `out_` | Output system | All user-facing and machine-readable output | `out_text`, `out_info`, `out_success`, `out_json`, `out_die` |
 | `inst_` | Installation & self-management | Install, self-update, self-uninstall, install detect | `inst_perform_install`, `inst_self_update`, `inst_is_installed` |
-| `util_` | General utilities | Reusable helpers (backup, path resolve, storage) | `util_backup`, `util_resolve_storage`, `util_get_install_bin_path` |
+| `util_` | General utilities | Reusable helpers (backup, path resolve, cache + persistence) | `util_backup`, `util_resolve_storage`, `util_resolve_persistent_storage`, `util_get_install_bin_path` |
 | `app_` | General app CLI surface (product-neutral) | Entry, dispatch, about/help/version presentation | `app_main`, `app_about`, `app_help`, `app_version` |
 | `ver_` | Version comparison | Semantic version handling | `ver_gt`, `ver_check` |
 | `path_` | Shell PATH & environment | PATH manipulation and shell config | `path_add_shell`, `path_add_bashrc` |
@@ -156,7 +180,7 @@ function_name() {
 | `inst_` | `inst_perform_install`, `inst_perform_install_prepare_target`, `inst_perform_install_download_with_checksum`, `inst_perform_install_download_without_checksum`, `inst_perform_install_atomic_install`, `inst_maybe_install`, `inst_self_update`, `inst_self_uninstall` (+ determine_bin / confirm_and_remove / cleanup_path), `inst_is_installed`, `inst_get_version` |
 | `ver_` | `ver_gt`, `ver_check` |
 | `path_` | `path_add_bashrc`, `path_add_zshrc`, `path_add_fish`, `path_add_shell` |
-| `util_` | `util_json_escape`, `util_sha256_file`, `util_fetch_remote_version`, `util_get_install_bin_path`, `util_backup`, `util_resolve_storage` (**wired** from `app_main` / `app_about`; SSOT: `requirement-shell-cli-storage.md`), `util_get_current_shell` |
+| `util_` | `util_json_escape`, `util_sha256_file`, `util_fetch_remote_version`, `util_get_install_bin_path`, `util_backup`, `util_resolve_storage` / `util_preferred_cache_dir` / `util_fallback_cache_dir` / `util_persistent_storage_dir` / `util_resolve_persistent_storage` (**wired** from `app_main` / `app_about`; SSOT: `requirement-shell-cli-storage.md`), `util_get_current_shell` |
 | `prompt_` | `prompt_ask`, `prompt_yes_no` |
 | `app_` | `app_about`, `app_version` (dispatcher routes `version` here), `app_help`, `app_main` |
 
@@ -253,6 +277,20 @@ A modular-structure change for gitlab-nginx is **not done** if any of the follow
 
 ---
 
-**Last Updated**: 2026-07-19  
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** prefixes and the single ship unit still apply; do not add helpers that only work via `sudo`.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-CLI-01** | `tests/test_cli.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 3, 6, 7, 8, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

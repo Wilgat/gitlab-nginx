@@ -11,6 +11,30 @@ It defines interactive vs non-interactive behavior for this shell project (globa
 **Scope:** Mode detection signals, prompt policy, auto-install vs confirm, force/skip rules, interaction with quiet/json/debug and output SSOT.  
 **Out of scope (cited, not re-owned):** Full command catalog (`requirement-shell-cli-interface.md`); output function catalog (`requirement-shell-output-requirements.md`); self-update integrity (`requirement-shell-self-management.md`); idempotency matrix (`requirement-shell-idempotency.md`).
 
+### 1.1 Human-facing
+
+**In one sentence:** On a terminal the program may ask you a question; in a pipe or `--json` it must never hang waiting for a key.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | TTY + no `--json` → confirms allowed | `gitlab-nginx self-uninstall` |
+| The other role | CI / `curl \| sh` / `--json` → documented defaults | non-interactive install |
+| Not this file | Dest approval yes/no (this product has no dest) | class residual none |
+
+| Includes | Excludes |
+|----------|----------|
+| Measure TTY **outside** functions; helpers consume `TTY` | Live `[ -t` inside `prompt_*` as the policy SSOT |
+| `--force` skips confirms where documented | Hanging `read` in `--json` |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `gitlab-nginx --json self-uninstall` | command | fail closed or structured confirm_required |
+| `sudo gitlab-nginx run` | command | TTY required for full setup |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Automate | Non-interactive `run` does **not** claim full GitLab setup. Uninstall without TTY needs `--force` or JSON `confirm_required`. | `gitlab-nginx --json self-uninstall` |
+
 ---
 
 ## 2. Core Rules / Requirements (Mandatory)
@@ -28,7 +52,7 @@ For shell CLIs without a separate Config class, the **mode SSOT** is the **globa
 
 | Signal | Variable / check | Meaning |
 |--------|------------------|---------|
-| TTY | `TTY=1` when stdin and stdout are terminals; also live `[ -t 0 ]` / `[ -t 1 ]` in prompt helpers | Interactive UX possible |
+| TTY | `TTY=1` when stdin and stdout are terminals — measured **outside functions** (dispatcher / startup); helpers **consume `TTY`** | Interactive UX possible |
 | Quiet | `QUIET=1` (`--quiet` / `-q`) | Suppress non-essential human chatter |
 | JSON | `JSON=1` (`--json`; implies quiet) | Machine output; no human hang; no human banners |
 | Debug | `DEBUG=1` (`--debug`) | Extra stderr diagnostics; suppressed under JSON |
@@ -40,7 +64,7 @@ For shell CLIs without a separate Config class, the **mode SSOT** is the **globa
 1. Prompt, color, and hang-sensitive decisions **MUST** respect these globals and/or the shared `prompt_*` helpers—not ad-hoc `read` scattered in domain logic.  
 2. After global flags are parsed in `app_main`, subsequent code **MUST** see the updated `QUIET` / `JSON` / `FORCE` / `DEBUG` values.  
 3. Do **not** invent a second parallel mode system in individual commands.  
-4. Direct `[ -t … ]` checks **inside** `prompt_*` and carefully documented install helpers are allowed as part of the mode SSOT implementation; command business logic **SHOULD** call `prompt_*` instead of re-implementing prompt guards.
+4. Interactive-capability `[ -t 0 ]` / `[ -t 1 ]` **MUST** run in the main process **outside** functions (or a setter that assigns `TTY`). `prompt_*` / `out_*` / `about` **MUST** read `TTY`. Live `[ -t` inside `prompt_*` as the policy gate is **forbidden**. `--file` xor stdin may probe current `[ -t 0 ]` only when named as a data-source check, not interactive-capability SSOT.
 
 ```text
 flags + TTY / environment
@@ -225,6 +249,22 @@ Mode-related work for gitlab-nginx is **not done** if any of the following fail:
 
 ---
 
-**Last Updated**: 2026-07-19  
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** TTY vs non-TTY still applies to this-login prompts (uninstall confirm, first install). Host-setup TTY (`run`) is unused on that class.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-CLI-07** | `tests/test_cli.sh` | have |
+| **TP-CLI-09** | `tests/test_cli.sh` | have |
+| **TP-GLN-08** | `tests/test_domain.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 3, 16, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

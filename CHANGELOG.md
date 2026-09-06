@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.2] - 2026-09-06
+
+### Added
+- **Human-facing law:** every Active `requirement-*.md` now has **§1.1 Human-facing** (who / other role / not this; includes/excludes; practice command).
+- **`requirement-shell-script-coding`** — POSIX `/bin/sh` coding specialize-in home (without it, portable lessons arrive raw).
+- **`requirement-shell-sudo-command`** — studied in-tool sudo allow table (`systemctl stop nginx`; `sudo -u nginx-adm nginx -t`).
+- Product **`reviews/requirement-test-matrix.md`** (requirement → TP families).
+- Tests **TP-GLN-11…13**: `email` routed; `ssh-hostname` / `remove-lpu` non-root fail-closed. Help lists `remove-lpu`.
+
+### Changed
+- **Product README** rewritten for people: install vs GitLab setup, automatic SHA-256 as primary integrity, no Type-N lead, mandatory section order.
+- **Storage law:** `requirement-shell-cli-storage` owns **cache folder** *and* **persistence folder** (`${HOME}/.local/gitlab-nginx`). `about` human labels **Cache folder (preferred)/(fallback)** and **Persistence folder**; JSON adds `cache_preferred`, `cache_fallback`, `persistence_storage`. Persistence is not `${HOME}/.local/bin` and not domain `/etc/letsencrypt/*`.
+- CLI `help` copy: self-management as any login; `remove-lpu` described as dedicated `nginx-adm` / `gitlab-adm` accounts (not “LPU” as the only words).
+- Dual mention: domain verbs named on **both** `requirement-shell-cli-interface` and `requirement-domain-gitlab-nginx`.
+- Related shell REQs include **Under command line for normal user only** (Termux / Git Bash / Windows cmd: no host setup, no dedicated accounts, no `sudo curl | sh`).
+
 ## [2.5.1] - 2026-08-12
 
 ### Changed

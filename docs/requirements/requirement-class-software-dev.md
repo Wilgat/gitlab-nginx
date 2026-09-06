@@ -10,6 +10,30 @@ Declare this workspace as a **software-development** project class and hold the 
 
 This file is **class law + residual SSOT**, not a second copy of Type 0 lifecycle, checksum, output, or storage tables (those stay on peer shell requirements).
 
+### 1.1 Human-facing
+
+**In one sentence:** This folder’s **project nature** is software-development: the program people install is `./gitlab-nginx`, written in POSIX `/bin/sh`.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | You use a finished CLI, not an empty workshop kit | `gitlab-nginx help` |
+| The other role | Peer shell/domain files own commands, checksum, GitLab setup | `requirement-domain-gitlab-nginx` |
+| Not this file | Server-maintenance allowlists; genesis empty law | no `requirement-class-server-maintenance` |
+
+| Includes | Excludes |
+|----------|----------|
+| Language, toolchain, test runner residual | Full command tables (peer files) |
+| Honest **no dest approver** / **no dest fence** | Inventing `*-adm` as a dest approver |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `./gitlab-nginx` | program file people install | live product |
+| `docs/requirements/index.md` | registry | which files are law |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Confirm nature | This is a shippable program, not a blank starter kit. | `gitlab-nginx version` |
+
 ---
 
 ## 2. Core Rules (Mandatory)
@@ -84,7 +108,7 @@ This file is **class law + residual SSOT**, not a second copy of Type 0 lifecycl
 | **Architectures supported** | any arch with a POSIX sh and the external tools the script invokes (no arch-specific binary) |
 | **Git surface** | used for product publish (`github.com/Wilgat/gitlab-nginx`) |
 | **Ship unit / install** | yes — repo root `./gitlab-nginx` + companion `gitlab-nginx.sha256`; Type 0 online install (peer shell REQs) |
-| **Product version SSOT** | `VERSION="…"` hard-assign in `./gitlab-nginx` (currently `1.2.1`) |
+| **Product version SSOT** | `VERSION="…"` hard-assign in `./gitlab-nginx` (currently `2.5.2`) |
 
 **Residual ownership table:**
 
@@ -98,11 +122,15 @@ This file is **class law + residual SSOT**, not a second copy of Type 0 lifecycl
 | Self-management lifecycle | `requirement-shell-self-management` | Do not duplicate |
 | Automatic companion digest | `requirement-shell-automatic-checksum` | Do not duplicate |
 | Output SSOT (`out_*`) | `requirement-shell-output-requirements` | Do not duplicate |
-| Scratch/cache storage resolve | `requirement-shell-cli-storage` | Do not duplicate |
+| Cache folder + persistence folder resolve | `requirement-shell-cli-storage` | Do not duplicate |
 | Idempotency / re-run safety | `requirement-shell-idempotency` | Do not duplicate |
 | Interactive vs non-interactive | `requirement-shell-interactive-vs-noninteractive` | Do not duplicate |
 | Modular prefixes / single-file layout | `requirement-shell-modular-function-design` | Do not duplicate |
-| Domain features / help / about extras | *none* (bootstrap — no domain SSOT) | Add `requirement-domain-*` only when domain ops exist |
+| POSIX `/bin/sh` coding style (specialize-in) | `requirement-shell-script-coding` | Without that file, portable lessons arrive raw |
+| In-tool sudo allow table | `requirement-shell-sudo-command` | Studied argv; do not duplicate |
+| Domain features / help / about extras | `requirement-domain-gitlab-nginx` | GitLab/Nginx domain SSOT; do not duplicate |
+| Actor / role / subject / approver | **this file** (considered) | **No dest approver** — this product is not an approval dest |
+| Dest fence conditions | **this file** (considered) | **No dest fence conditions** — no dest approve/reject inbound on this product |
 
 ---
 
@@ -164,11 +192,21 @@ This file is **class law + residual SSOT**, not a second copy of Type 0 lifecycl
 | `requirement-shell-self-management` | Lifecycle |
 | `requirement-shell-automatic-checksum` | Companion integrity |
 | `requirement-shell-output-requirements` | `out_*` SSOT |
-| `requirement-shell-cli-storage` | Scratch/cache resolve |
+| `requirement-shell-cli-storage` | Cache folder + persistence folder resolve |
 | `requirement-shell-idempotency` | Re-run safety |
 | `requirement-shell-interactive-vs-noninteractive` | Mode policy |
 | `requirement-shell-modular-function-design` | Prefixes / single-file modularity |
+| `requirement-shell-script-coding` | POSIX coding specialize-in home |
+| `requirement-shell-sudo-command` | In-tool sudo allow table |
 | `docs/requirements/index.md` | Registry SSOT |
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-CLI-01** | `tests/test_cli.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
 
 ---
 
@@ -180,6 +218,6 @@ This file is **class law + residual SSOT**, not a second copy of Type 0 lifecycl
 
 ---
 
-**Last Updated**: 2026-07-19  
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 4, 5, 20, 21 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

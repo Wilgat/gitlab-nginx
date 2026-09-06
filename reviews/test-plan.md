@@ -5,12 +5,12 @@ Maps **portable TP families** (proof molds) and product domain cases to product-
 | Field | Value |
 |-------|--------|
 | **Product** | gitlab-nginx |
-| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.1` |
+| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.2` |
 | **Companion** | `./gitlab-nginx.sha256` |
 | **Suite entry** | `./tests/run.sh` |
-| **Live law** | **11** Active REQs — `docs/requirements/index.md` |
+| **Live law** | **13** Active REQs — `docs/requirements/index.md` |
 | **Bootstrap origin** | selfmanaged 1.2.1 (A→B specialize) |
-| **Last update** | 2026-08-12 (2.5.1: dual LPU home `/etc/*-adm`, `remove-lpu` + `userdel -r`; docs version align) |
+| **Last update** | 2026-09-06 (2.5.2: human-readable README/REQs; coding-style + sudo REQs; TP-GLN-11…13) |
 
 Status: **have** = automated · **todo** = needed · **n/a** = not applicable · **optional** = gated (root/host)
 
@@ -26,7 +26,7 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | **TP-GLN** | `PM-DOMAIN-TEST-PLAN` (domain subject) | `tests/test_domain.sh` | **RQ-DOMAIN-GITLAB-NGINX** (`remove-lpu` catalog; host teardown optional/root) |
 | Umbrella | `PM-SHELL-CLI-SUITE-TEST-PLAN` | `tests/run.sh` | full Type 0 + domain surface |
 
-**Storage split:** shell scratch / about fields → **RQ-SHELL-CLI-STORAGE** (TP-CLI). Domain host paths (`/etc/letsencrypt/*`) → **RQ-DOMAIN-GITLAB-NGINX** (TP-GLN about fields; host-mutating ops optional).
+**Storage split:** shell **cache folder** + **persistence folder** / about fields → **RQ-SHELL-CLI-STORAGE** (TP-CLI). Domain host paths (`/etc/letsencrypt/*`) → **RQ-DOMAIN-GITLAB-NGINX** (TP-GLN about fields; host-mutating ops optional). Persistence folder is `${HOME}/.local/gitlab-nginx` — **not** `${HOME}/.local/bin` and **not** Let's Encrypt files.
 
 ---
 
@@ -36,6 +36,8 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 |------|--------|-------|
 | 2026-08-11 | PASS=108 FAIL=25 | Initial suite; host `/usr/local/bin/gitlab-nginx` shadowed installs; `run` non-root false success |
 | 2026-08-11 | **PASS=133 FAIL=0 SKIP=0** | 2.3.1 + GLOBAL_BIN isolation + `check_root` on non-interactive run |
+| 2026-08-30 | **PASS=145 FAIL=0 SKIP=0** | Cache folder + persistence folder about fields (`RQ-SHELL-CLI-STORAGE` 1.1.0) |
+| 2026-09-06 | **PASS=154 FAIL=0 SKIP=0** | 2.5.2 human-facing law + TP-GLN-11…13 |
 
 **How to re-baseline:** `cd` product root → `./tests/run.sh` → paste summary into this table when law/suite changes.
 
@@ -48,8 +50,8 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | TP-CLI-01 | Syntax + companion digest | **have** | `sh -n`; `gitlab-nginx.sha256` |
 | TP-CLI-02 | Version human + JSON | **have** | app/version fields |
 | TP-CLI-03 | Help Type 0; no CHECKSUM | **have** | test_cli |
-| TP-CLI-04 | About JSON + storage fields | **have** | effective_storage / storage_dir |
-| TP-CLI-05 | Storage isolation under HOME | **have** | GLOBAL_BIN + USER_BIN isolate |
+| TP-CLI-04 | About JSON + cache/persistence fields | **have** | cache_preferred / cache_fallback / persistence_storage / effective_storage / storage_dir |
+| TP-CLI-05 | Cache + persistence isolation under HOME | **have** | GLOBAL_BIN + USER_BIN isolate; persistence under `${HOME}/.local/gitlab-nginx` |
 | TP-CLI-06 | Unknown command fail-closed | **have** | exit 1 + out_error |
 | TP-CLI-07 | quiet / env -u HOME | **have** | test_cli |
 | TP-CLI-08 | Zero-arg failed install non-zero | **have** | bad SCRIPT_URL + isolate |
@@ -87,6 +89,9 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | TP-GLN-08 | `run` non-root fail-closed | **have** | `check_root` (2.3.1) |
 | TP-GLN-09 | Full interactive host setup | **optional** | requires root + TTY + host packages |
 | TP-GLN-10 | `nginx-conf` regenerate on live host | **optional** | root + saved domains |
+| TP-GLN-11 | `email` routed | **have** | test_domain (not unknown) |
+| TP-GLN-12 | `ssh-hostname` non-root fail-closed | **have** | exit 1 + root message |
+| TP-GLN-13 | `remove-lpu` non-root fail-closed | **have** | exit 1 + root message |
 
 ---
 

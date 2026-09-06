@@ -79,7 +79,16 @@ run_test_cli() {
     assert_not_contains "about --json must not include CHECKSUM" "$_out" "CHECKSUM"
     assert_contains "about --json effective_storage" "$_out" '"effective_storage"'
     assert_contains "about --json storage_dir" "$_out" '"storage_dir"'
+    assert_contains "about --json cache_preferred" "$_out" '"cache_preferred"'
+    assert_contains "about --json cache_fallback" "$_out" '"cache_fallback"'
+    assert_contains "about --json persistence_storage" "$_out" '"persistence_storage"'
     assert_contains "about --json storage includes app name" "$_out" "${APP_NAME:-gitlab-nginx}"
+    _out_h=$(sh "${SCRIPT}" about 2>/dev/null)
+    assert_contains "about human Cache folder (preferred)" "$_out_h" "Cache folder (preferred):"
+    assert_contains "about human Cache folder (fallback)" "$_out_h" "Cache folder (fallback):"
+    assert_contains "about human Persistence folder" "$_out_h" "Persistence folder:"
+    assert_not_contains "about human must not use Storage (effective)" "$_out_h" "Storage (effective)"
+    assert_not_contains "about human must not use Storage (fallback)" "$_out_h" "Storage (fallback)"
 
     # --- storage resolve isolation (EFFECTIVE_STORAGE_DIR via util_resolve_storage) ---
     ci_isolated_env 2>/dev/null || true
@@ -92,6 +101,22 @@ run_test_cli() {
             *) t_fail "effective_storage missing app isolation in: $_out" ;;
         esac
         assert_contains "storage_dir field present under isolation" "$_out" '"storage_dir"'
+        assert_contains "isolated about persistence_storage field" "$_out" '"persistence_storage"'
+        case "$_out" in
+            *'"persistence_storage":"'"${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}"'"'*) \
+                t_pass "persistence_storage is ${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}" ;;
+            *) t_fail "persistence_storage missing isolated HOME/.local/app path in: $_out" ;;
+        esac
+        _persist="${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}"
+        if [ -d "$_persist" ]; then
+            t_pass "persistence folder exists after resolve"
+        else
+            t_fail "persistence folder missing: '${_persist}'"
+        fi
+        case "$_persist" in
+            */.local/bin|*/.local/bin/) t_fail "persistence folder must not be USER_BIN" ;;
+            *) t_pass "persistence folder is not USER_BIN" ;;
+        esac
         _custom="${CI_HOME}/custom-storage-root"
         _out=$(HOME="${CI_HOME}" STORAGE_DIR="${_custom}" \
             sh "${SCRIPT}" --json about 2>/dev/null)

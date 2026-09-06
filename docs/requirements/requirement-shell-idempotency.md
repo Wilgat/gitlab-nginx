@@ -13,6 +13,30 @@ It defines re-run safety for ensure-style shell lifecycle commands (install, PAT
 
 **Informal formula:** for ensure-style operation *f* and system state *x*, **f(f(x)) ≈ f(x)** for the **desired outcome** (logs and timestamps may differ).
 
+### 1.1 Human-facing
+
+**In one sentence:** Running install (or PATH ensure) a second time must succeed and **not** duplicate files or PATH lines.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | Re-run `gitlab-nginx` / `install` after it already worked | already-installed message |
+| The other role | `--force` is a deliberate replace, not the default | `gitlab-nginx install --force` |
+| Not this file | GitLab `gitlab-ctl reconfigure` idempotency | Omnibus |
+
+| Includes | Excludes |
+|----------|----------|
+| Install no-op when present; PATH line once | Failing because “already installed” |
+| Partial-failure re-entry | Blind re-download on every no-op |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `gitlab-nginx` (no args, already installed) | command | success no-op |
+| `gitlab-nginx install` | command | same ensure |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Re-run the one-liner | Second run should say already installed (or equivalent) and exit 0, unless you passed `--force`. | `curl … \| sh` again |
+
 ---
 
 ## 2. Core Rules / Requirements (Mandatory)
@@ -171,6 +195,21 @@ A state-changing shell change for gitlab-nginx is **not done** if any of the fol
 
 ---
 
-**Last Updated**: 2026-07-19  
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** re-run safety applies to user-local install-ensure and PATH lines for this login only.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-LC-01** | `tests/test_install_lifecycle.sh` | have |
+| **TP-LC-02** | `tests/test_install_lifecycle.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; related `requirement-shell-cli-interface.md`; CIAO Principles 1, 2, 3, 11, 12, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

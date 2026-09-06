@@ -22,6 +22,7 @@ run_test_domain() {
     assert_contains "TP-GLN-01 help lists email" "$_out" "email"
     assert_contains "TP-GLN-01 help lists nginx-conf" "$_out" "nginx-conf"
     assert_contains "TP-GLN-01 help lists ssh-hostname" "$_out" "ssh-hostname"
+    assert_contains "TP-GLN-01 help lists remove-lpu" "$_out" "remove-lpu"
     assert_contains "TP-GLN-01 help lists --no-cloudflare" "$_out" "--no-cloudflare"
     assert_contains "TP-GLN-01 help still lists install" "$_out" "install"
     assert_contains "TP-GLN-01 help still lists self-update" "$_out" "self-update"
@@ -128,4 +129,39 @@ run_test_domain() {
         # If somehow succeeds without root, still fail closed expectation
         t_fail "TP-GLN-08 run non-root expected non-zero exit"
     fi
+
+    # --- TP-GLN-11: email command is routed (not unknown) ---
+    _errf=$(mktemp)
+    _out=$(sh "${SCRIPT}" email 2>"${_errf}")
+    _ec=$?
+    _err=$(cat "${_errf}" 2>/dev/null || true)
+    rm -f "${_errf}"
+    assert_not_contains "TP-GLN-11 email not unknown command" "${_out}${_err}" "Unknown command"
+    if [ "$_ec" -eq 0 ] || [ "$_ec" -eq 1 ]; then
+        t_pass "TP-GLN-11 email exits 0 or 1 (routed)"
+    else
+        t_fail "TP-GLN-11 email unexpected exit ${_ec}"
+    fi
+
+    # --- TP-GLN-12: ssh-hostname without root fails closed ---
+    _errf=$(mktemp)
+    _out=$(sh "${SCRIPT}" ssh-hostname 2>"${_errf}")
+    _ec=$?
+    _err=$(cat "${_errf}" 2>/dev/null || true)
+    rm -f "${_errf}"
+    _all="${_out}${_err}"
+    assert_eq "TP-GLN-12 ssh-hostname non-root exit 1" 1 "$_ec"
+    assert_not_contains "TP-GLN-12 ssh-hostname not unknown" "$_all" "Unknown command"
+    assert_contains "TP-GLN-12 ssh-hostname root required" "$_all" "root"
+
+    # --- TP-GLN-13: remove-lpu without root fails closed ---
+    _errf=$(mktemp)
+    _out=$(sh "${SCRIPT}" remove-lpu 2>"${_errf}")
+    _ec=$?
+    _err=$(cat "${_errf}" 2>/dev/null || true)
+    rm -f "${_errf}"
+    _all="${_out}${_err}"
+    assert_eq "TP-GLN-13 remove-lpu non-root exit 1" 1 "$_ec"
+    assert_not_contains "TP-GLN-13 remove-lpu not unknown" "$_all" "Unknown command"
+    assert_contains "TP-GLN-13 remove-lpu root required" "$_all" "root"
 }

@@ -32,6 +32,30 @@ Empty argv means **install-ensure** for three detect cases:
 **Scope:** Empty-argv routing, detect cases (global / local / absent), messages, force boundary, exit status, interaction with TTY / quiet / json.  
 **Out of scope (own requirements):** Full command catalog (`requirement-shell-cli-interface.md`); download/checksum detail (`requirement-shell-automatic-checksum.md`); full self-update/uninstall lifecycle (`requirement-shell-self-management.md`); output function catalog (`requirement-shell-output-requirements.md`); general idempotency matrix beyond empty-argv rows (`requirement-shell-idempotency.md`).
 
+### 1.1 Human-facing
+
+**In one sentence:** Running `gitlab-nginx` with **no arguments** installs this program (or reports it is already installed). It does **not** show help and does **not** set up GitLab.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | Pipe or empty argv means “put the program on my PATH” | `curl … \| sh` |
+| The other role | Root empty argv installs globally | `sudo curl … \| sudo sh` |
+| Not this file | `sudo gitlab-nginx run` (GitLab host setup) | domain requirement |
+
+| Includes | Excludes |
+|----------|----------|
+| Not installed → install; already installed → success no-op | Empty argv = help (Type N) |
+| TTY may confirm first install | Empty argv starting Certbot/GitLab |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `gitlab-nginx` (no args) | command | install-ensure |
+| `gitlab-nginx help` | command | full usage (explicit only) |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| First install via pipe | The one-liner has no extra words after `sh`. That empty argv is the install contract. | `curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx \| sh` |
+
 ---
 
 ## 2. Core Rules / Requirements (Mandatory)
@@ -227,7 +251,23 @@ This requirement is satisfied when all of the following hold:
 
 ---
 
-**Last Updated**: 2026-07-19  
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** empty argv still means install-ensure **for this login** (user-local path). It must not escalate or start GitLab host setup.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-CLI-08** | `tests/test_cli.sh` | have |
+| **TP-LC-03** | `tests/test_install_lifecycle.sh` | have |
+| **TP-GLN-04** | `tests/test_domain.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 3, 6, 16, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).
 

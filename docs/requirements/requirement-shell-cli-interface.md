@@ -6,10 +6,34 @@
 
 This requirement is the **project Single Source of Truth** for the **POSIX shell CLI interface** of the gitlab-nginx tool: command surface, privilege typing, global flags, dispatcher behavior, output modes, and interactive vs non-interactive rules.
 
-It defines a **Type 0–centric self-managed shell CLI** (install / update / uninstall of the tool itself). It does **not** invent Type 1 host-bootstrap or Type 2 system-user app-ops commands unless a future requirement adds them.
+It names **every routed verb twice** (this file + a topic-owner). Self-management verbs are **normal user privilege** (you, as yourself). Domain host-mutating verbs are **admin privilege** (already root) and are owned in detail by `requirement-domain-gitlab-nginx`.
 
 **Scope:** User-facing command names, flags, dispatch, privilege labels, and mode contracts.  
-**Out of scope (own requirements when specialized):** Online-install checksum mechanics detail, self-management safety beyond the command surface, shell coding style, full output-function catalog (cited, not re-owned).
+**Out of scope (own requirements when specialized):** Online-install checksum mechanics detail, self-management safety beyond the command surface, shell coding style, full output-function catalog (cited, not re-owned). Domain **semantics** (13-step setup, LPU homes) stay on `requirement-domain-gitlab-nginx` — this file still **names** those verbs.
+
+### 1.1 Human-facing
+
+**In one sentence:** You type `gitlab-nginx <command>` (or no command, which installs this program). Help lists every live command; unknown names fail with a pointer to `help`.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | Install, help, about, update this program as yourself | `gitlab-nginx about` |
+| The other role | Root session for GitLab host setup | `sudo gitlab-nginx run` |
+| Not this file | Checksum algorithm; GitLab 13-step body | peer requirements |
+
+| Includes | Excludes |
+|----------|----------|
+| Command table, flags, dispatcher, unknown-command | Numbered main menu (not claimed) |
+| Naming domain verbs (dual mention) | Empty argv = help |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `gitlab-nginx help` | command | listed verbs |
+| `./gitlab-nginx` | program file | `app_main` dispatch |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| See commands | Human help lists domain rows and self-management rows. JSON help is a short object. | `gitlab-nginx help` |
 
 ---
 
@@ -23,8 +47,8 @@ Every CIAO-Lite shell CLI **MUST** expose a documented command set. Commands **M
 |----------|-----------|---------|-------------------|
 | **Type 0 – Self-management / CLI lifecycle** | Invoking user (no elevation required for user-owned install) | Manage the CLI binary and diagnostics | `version`, `about`, `help`, `version-check`, `self-update`, `self-uninstall` |
 | **Type 0 – Install CLI binary** | Invoking user (root → global path; non-root → user path) | First-time or explicit placement of the CLI | `install`; empty argv **Type O install-ensure** (not installed / local / global) — `requirement-shell-cli-zero-arguments.md` |
-| **Type 1 – Host preparation** | Elevated (internal escalation when designed) | Host packages, system user create, Docker engine | *Not in scope for current product surface* |
-| **Type 2 – App ops under system user** | Dedicated least-privilege system user | App install/configure/runtime under app identity | *Not in scope for current product surface* |
+| **Admin privilege (workshop Type 1)** | Already root (or documented escalation) | Host packages, GitLab/Nginx setup, dedicated-account teardown | `run`, `nginx-conf`, `ssh-hostname`, `remove-lpu` — **topic-owner:** `requirement-domain-gitlab-nginx` |
+| **Dedicated system user privilege (workshop Type 2)** | Run *as* `nginx-adm` / `gitlab-adm` | Not a CLI verb today; setup *creates* those accounts | No routed Type 2 command; `sudo -u nginx-adm nginx -t` is in-tool (sudo REQ) |
 
 **Execution rules (core):**
 
@@ -82,11 +106,12 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 | **Primary executable** | Repo root `./gitlab-nginx` (POSIX `/bin/sh`, single-file for `curl \| sh`) |
 | **Dispatcher** | `app_main` (always invoked at end of script: `app_main "$@"` — no `${0##*/}` / APP_NAME basename gate; required for `curl \| sh`) |
 | **Output SSOT** | `out_text` + wrappers (`out_info`, `out_success`, `out_warn`, `out_error`, `out_die`, `out_plain`, `out_json`, …) |
-| **Version SSOT** | `VERSION` default `1.2.1` (script header / config block: `VERSION="1.2.1"`) |
+| **Version SSOT** | `VERSION` hard-assign in script config block (`VERSION="2.5.2"`) |
 | **Install paths** | Global: `GLOBAL_BIN` default `/usr/local/bin`; User: `USER_BIN` default `${HOME}/.local/bin` |
 | **Remote channel env (help surface)** | `REPO_USER` / `REPO_NAME` (defaults `Wilgat` / `gitlab-nginx`); `SCRIPT_URL` composed default `https://raw.githubusercontent.com/${REPO_USER}/${REPO_NAME}/main/${APP_NAME}` (literal product default: `https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx`; override via env). **`help` / `about` MUST list these operator channel vars as designed — MUST NOT list `CHECKSUM`** (install-path runtime pin only; see `requirement-shell-automatic-checksum.md`) |
-| **Type 1 / Type 2 commands** | **None** on current surface — this tool is CLI lifecycle only |
-| **Dedicated system user** | **Not required** for Type 0 CLI self-management |
+| **Admin-privilege commands** | Named here; **owned** by `requirement-domain-gitlab-nginx`: `run`, `nginx-conf`, `ssh-hostname`, `remove-lpu` |
+| **Read domain commands** | Named here; owned by domain REQ: `domains`, `email` |
+| **Dedicated system user** | **Not required** for CLI self-management; domain setup **creates** `nginx-adm` / `gitlab-adm` |
 
 #### Supported commands (normative for this project)
 
@@ -100,6 +125,12 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 | `self-update` | Type 0 | `inst_self_update` | Fetch remote version; reinstall when policy allows; reuse install primitives |
 | `self-uninstall` | Type 0 | `inst_self_uninstall` | Remove managed binary; PATH cleanup only if `~/.local/bin` empty (user installs) |
 | `help` | Type 0 | `app_help` | Full usage in human mode; short JSON note in JSON mode; Environment lists channel vars only — **not** `CHECKSUM` |
+| `run` (alias `setup`) | Admin (root) | `run_interactive_setup` / `run_non_interactive_setup` | Full GitLab+Nginx setup. **Topic-owner:** `requirement-domain-gitlab-nginx`. Sample: `sudo gitlab-nginx run` |
+| `domains` | Invoker (read) | `show_domains` | Show saved domains. **Topic-owner:** domain REQ. Sample: `gitlab-nginx domains` |
+| `email` | Invoker (read) | `show_email` | Show saved Let's Encrypt email. **Topic-owner:** domain REQ. Sample: `gitlab-nginx email` |
+| `ssh-hostname` | Admin (root) | `get_or_set_gitlab_ssh_hostname` | Show/set GitLab SSH hostname. **Topic-owner:** domain REQ. Sample: `sudo gitlab-nginx ssh-hostname` |
+| `nginx-conf` | Admin (root) | `deploy_domain_nginx_configs` | Regenerate external Nginx config. **Topic-owner:** domain REQ. Sample: `sudo gitlab-nginx nginx-conf` |
+| `remove-lpu` | Admin (root) | `remove_least_privilege_operators` | Remove dedicated nginx-adm / gitlab-adm. **Topic-owner:** domain REQ. Sample: `sudo gitlab-nginx remove-lpu all --force` |
 
 #### Global flags (normative wiring for this project)
 
@@ -120,9 +151,9 @@ In JSON mode, help **MUST NOT** dump long human text; return a short structured 
 
 #### Explicitly out of scope until a new requirement
 
-- Type 1: `prerequisites`, `create-user`, Docker host install, etc.  
-- Type 2: app `start`/`stop`/`configure` under a system user  
-- Domain product subcommands unrelated to CLI lifecycle  
+- Extra host-bootstrap verbs (`prerequisites`, Docker engine install as a separate command)  
+- A routed Type 2 command that *is* `nginx-adm` (setup creates the account; no `gitlab-nginx as-nginx-adm` verb)  
+- Numbered main menu / `menu` command (not claimed; empty argv remains install-ensure)  
 
 ### 2.7 Why This Requirement Exists (Direct CIAO Alignment)
 
@@ -174,7 +205,7 @@ This requirement is satisfied for the gitlab-nginx shell CLI when all of the fol
 2. Global flags in §2.6 are parsed and honored.  
 3. Output modes match §2.4 (including JSON purity).  
 4. Install privilege paths remain invoker-based (root/global vs user/local).  
-5. No Type 1/2 surface claims exist without matching specialized requirements.  
+5. Domain verbs in §2.6 are named here **and** on `requirement-domain-gitlab-nginx` (dual mention); help lists them.  
 6. Protection Rule items are not violated in code or docs.  
 7. Traceability: implementation changes cite this file path / key `requirement-shell-cli-interface`.
 
@@ -190,11 +221,25 @@ This requirement is satisfied for the gitlab-nginx shell CLI when all of the fol
 | `docs/requirements/requirement-shell-cli-zero-arguments.md` | Empty argv install-ensure (not installed / local / global) |
 | `docs/requirements/requirement-shell-idempotency.md` | Re-run safety for ensure ops |
 | `docs/requirements/requirement-shell-modular-function-design.md` | Prefix ownership (`app_`, `inst_`, `out_*`) |
+| `docs/requirements/requirement-domain-gitlab-nginx.md` | Domain verb **topic-owner** (dual mention) |
 | `docs/requirements/index.md` | Registry SSOT |
 | `./gitlab-nginx` | Implementation under test |
 
----
+## Under command line for normal user only
 
-**Last Updated**: 2026-07-19  
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** `run`, `nginx-conf`, `ssh-hostname`, and `remove-lpu` are unused on that class; `help` still lists them as Linux-host commands. Self-management (`install` locally, `version`, `about`, `help`) remains available as yourself.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-CLI-01…09** | `tests/test_cli.sh` | have |
+| **TP-GLN-01** | `tests/test_domain.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 3, 5, 6, 10, 16, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

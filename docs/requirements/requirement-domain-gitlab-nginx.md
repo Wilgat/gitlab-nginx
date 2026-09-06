@@ -5,7 +5,7 @@
 
 ## 1. Purpose
 
-This requirement is the **project Single Source of Truth for domain product law** of the **gitlab-nginx** POSIX shell CLI: **GitLab CE + external Nginx + Let's Encrypt setup beyond Type 0 self-management**.
+This requirement is the **project Single Source of Truth for domain product law** of the **gitlab-nginx** POSIX shell CLI: **GitLab CE + external Nginx + Let's Encrypt setup beyond installing this program itself**.
 
 **Specialized from:** bootstrap product **selfmanaged** (Type 0 architecture inheritance: `out_*` / `inst_*` / `app_*`) + legacy gitlab-nginx 2.2.0 domain DNA (13-step setup, nginx-adm / gitlab-adm least privilege, Cloudflare-aware SSH hostname).
 
@@ -21,7 +21,7 @@ It owns the **four domain pillars**:
 | Peer | Requirement-ID | Owns |
 |------|----------------|------|
 | CLI interface | **RQ-SHELL-CLI-INTERFACE** | Dispatch, empty argv Type O, help routing |
-| Shell CLI storage | **RQ-SHELL-CLI-STORAGE** | Scratch/cache resolve, isolation, about storage fields |
+| Shell CLI storage | **RQ-SHELL-CLI-STORAGE** | Cache folder + persistence folder resolve, isolation, about storage fields |
 | Output | **RQ-SHELL-OUTPUT-REQUIREMENTS** | `out_*` channels (domain may use thin shims to `out_*`) |
 
 **Scope:** Domain command surface, host setup semantics, persistence paths, human/JSON domain contracts, help/about domain rows.  
@@ -32,6 +32,31 @@ It owns the **four domain pillars**:
 **Registry role:** This is the **one Active domain-requirements SSOT** for gitlab-nginx. Parallel Active domain-law files are forbidden.
 
 **Naming law:** Domain SSOT basename is `requirement-domain-gitlab-nginx.md` (subject **gitlab-nginx**).
+
+### 1.1 Human-facing
+
+**In one sentence:** After the program is installed, you run `sudo gitlab-nginx run` on a Linux server so GitLab CE sits behind Nginx you control, with Let's Encrypt certificates.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | Operator with DNS pointing at the server; full setup needs root | `sudo gitlab-nginx run` |
+| The other role | Dedicated `nginx-adm` / `gitlab-adm` own Nginx/GitLab files after setup | `sudo gitlab-nginx remove-lpu all` |
+| Not this file | Installing *this* CLI (`install`, empty argv, `self-update`) | `gitlab-nginx` with no arguments |
+
+| Includes | Excludes |
+|----------|----------|
+| `run`, `domains`, `email`, `ssh-hostname`, `nginx-conf`, `remove-lpu` | Empty argv starting GitLab setup |
+| Let's Encrypt files under `/etc/letsencrypt/` | Moving those files into `${HOME}/.local/gitlab-nginx` |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `sudo gitlab-nginx run` | command | 13-step host setup |
+| `gitlab-nginx domains` | command | saved domain list |
+| `/etc/letsencrypt/domains.conf` | file | persistence |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Set up GitLab | Interactive terminal + root. Non-interactive `run` only does packages/stop, then tells you to re-run on a TTY. | `sudo gitlab-nginx run` |
 
 ---
 
@@ -124,7 +149,7 @@ Plus full Type 0 self-management table.
 - email file path + email (if known)  
 - useful domain command reminders  
 
-Type 0 fields (version, install path, channel, storage) remain required by shell law.
+CLI lifecycle fields (version, install path, channel, cache folder, persistence folder) remain required by shell law.
 
 ---
 
@@ -145,3 +170,23 @@ Type 0 fields (version, install path, channel, storage) remain required by shell
 - Bootstrap origin A = **selfmanaged** 1.2.1 architecture.  
 - Pre-specialize B body archived under `.bootstrap-archive/pre-specialize-*`.  
 - Version at specialize apply: **2.3.0** (architecture re-base + domain graft).
+
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create `nginx-adm` / `gitlab-adm`, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** `run`, `nginx-conf`, `ssh-hostname`, and `remove-lpu` are unused on that class. Read-only `domains` / `email` may still run if those files exist and are readable.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-GLN-01…08** | `tests/test_domain.sh` | have |
+| **TP-GLN-11…13** | `tests/test_domain.sh` | have |
+| **TP-GLN-09…10** | host-mutating | optional |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
+**Owner**: gitlab-nginx project maintainers  
+**Alignment**: Registry `docs/requirements/index.md`; CIAO (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).

@@ -11,6 +11,30 @@ This requirement is the **project Single Source of Truth** for **automatic compa
 
 **Must not confuse with:** Embedding a hash of `./gitlab-nginx` *inside* `./gitlab-nginx`; requiring operators to set `CHECKSUM` for every install; claiming independent host authenticity from same-channel SHA-256 alone.
 
+### 1.1 Human-facing
+
+**In one sentence:** When you install or update this program from the internet, it downloads a SHA-256 sidecar next to the script, shows you the link and the expected digest, and aborts if they do not match.
+
+| Box | Meaning | Example |
+|-----|---------|---------|
+| You / this login | You run the one-liner without setting a pin | `curl … \| sh` |
+| The other role | CI may set `CHECKSUM` as an optional freeze (Advanced only) | process env |
+| Not this file | Signing releases; GitLab host setup | not claimed |
+
+| Includes | Excludes |
+|----------|----------|
+| Automatic `${SCRIPT_URL}.sha256`; link / value / result in human mode | Leading README with `CHECKSUM=` as the newcomer path |
+| Mismatch aborts; missing sidecar warns and continues | Listing `CHECKSUM` in `help` / `about` |
+
+| Surface | What you open | What for |
+|---------|---------------|----------|
+| `gitlab-nginx.sha256` | companion file | publisher digest |
+| `gitlab-nginx help` | command | must **not** list CHECKSUM |
+
+| You do… | What it means | What you type |
+|---------|---------------|---------------|
+| Install from the channel | The program fetches the companion itself. You do not need `CHECKSUM=` for the default path. | `curl -fsSL https://raw.githubusercontent.com/Wilgat/gitlab-nginx/main/gitlab-nginx \| sh` |
+
 ---
 
 ## 2. Core Rules / Requirements (Mandatory)
@@ -224,6 +248,22 @@ Integrity work for gitlab-nginx is **not done** if any of the following fail:
 
 ---
 
-**Last Updated**: 2026-07-19  
+## Under command line for normal user only
+
+When this program runs on Termux, Git Bash, Windows Command Prompt, or the same class: **admin privilege** and **dedicated system user privilege** are unused. Do not wrap `sudo`, do not wrap Linux `apt`/`dnf`, do not create dedicated system users, and do not recommend `sudo curl | sh`. Git Bash and Windows cmd must not invoke Termux `pkg`.
+
+**This requirement:** automatic companion verify still runs for this-login install-ensure. Do not require a root pin.
+
+## Design-time verification
+
+| TP family / ID | Suite | Status |
+|----------------|-------|--------|
+| **TP-LC-06** | `tests/test_install_lifecycle.sh` | have |
+| **TP-LC-08** | `tests/test_install_lifecycle.sh` | have |
+| **TP-CLI-03** | `tests/test_cli.sh` | have |
+
+**Map:** `reviews/test-plan.md`.
+
+**Last Updated**: 2026-09-06  
 **Owner**: gitlab-nginx project maintainers  
 **Alignment**: Registry `docs/requirements/index.md`; CIAO Principles 1, 2, 3, 5, 14, 4, 20 (v2.10.2) (https://github.com/cloudgen/ciao); CIAO-Lite (https://github.com/cloudgen/ciao-lite).
