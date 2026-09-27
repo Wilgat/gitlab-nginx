@@ -5,12 +5,12 @@ Maps **portable TP families** (proof molds) and product domain cases to product-
 | Field | Value |
 |-------|--------|
 | **Product** | gitlab-nginx |
-| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.3` |
+| **Ship unit** | `./gitlab-nginx` · `VERSION=2.5.4` |
 | **Companion** | `./gitlab-nginx.sha256` |
 | **Suite entry** | `./tests/run.sh` |
 | **Live law** | **13** Active REQs — `docs/requirements/index.md` |
 | **Bootstrap origin** | selfmanaged 1.2.1 (A→B specialize) |
-| **Last update** | 2026-09-06 (2.5.3: live `app_help` SSOT; setup alias; no foreign help catalog) |
+| **Last update** | 2026-09-27 (2.5.4: per-login per-process cache folder; silent tier miss) |
 
 Status: **have** = automated · **todo** = needed · **n/a** = not applicable · **optional** = gated (root/host)
 
@@ -26,7 +26,7 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | **TP-GLN** | `PM-DOMAIN-TEST-PLAN` (domain subject) | `tests/test_domain.sh` | **RQ-DOMAIN-GITLAB-NGINX** (`remove-lpu` catalog; host teardown optional/root) |
 | Umbrella | `PM-SHELL-CLI-SUITE-TEST-PLAN` | `tests/run.sh` | full Type 0 + domain surface |
 
-**Storage split:** shell **cache folder** + **persistence folder** / about fields → **RQ-SHELL-CLI-STORAGE** (TP-CLI). Domain host paths (`/etc/letsencrypt/*`) → **RQ-DOMAIN-GITLAB-NGINX** (TP-GLN about fields; host-mutating ops optional). Persistence folder is `${HOME}/.local/gitlab-nginx` — **not** `${HOME}/.local/bin` and **not** Let's Encrypt files.
+**Storage split:** shell **cache folder** + **persistence storage** / about fields → **RQ-SHELL-CLI-STORAGE** (TP-CLI-04 / TP-CLI-05). Domain host paths (`/etc/letsencrypt/*`) → **RQ-DOMAIN-GITLAB-NGINX** (TP-GLN about fields; host-mutating ops optional). Persistence storage is `${HOME}/.local/gitlab-nginx` — **not** `${HOME}/.local/bin` and **not** Let's Encrypt files. Linux cache preferred is `/dev/shm/cache/cache-${APP_NAME}-${login}-$$`. Git Bash and Mac prefer `/tmp/cache/...`. A skipped tier is silent.
 
 ---
 
@@ -39,6 +39,7 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | 2026-08-30 | **PASS=145 FAIL=0 SKIP=0** | Cache folder + persistence folder about fields (`RQ-SHELL-CLI-STORAGE` 1.1.0) |
 | 2026-09-06 | **PASS=154 FAIL=0 SKIP=0** | 2.5.2 human-facing law + TP-GLN-11…13 |
 | 2026-09-06 | **PASS=162 FAIL=0 SKIP=0** | 2.5.3 live `app_help`; setup alias; no foreign catalog |
+| 2026-09-27 | **PASS=185 FAIL=0 SKIP=0** | 2.5.4 per-login per-process cache; silent tier miss; Git Bash and Mac chains |
 
 **How to re-baseline:** `cd` product root → `./tests/run.sh` → paste summary into this table when law/suite changes.
 
@@ -51,8 +52,8 @@ Status: **have** = automated · **todo** = needed · **n/a** = not applicable ·
 | TP-CLI-01 | Syntax + companion digest | **have** | `sh -n`; `gitlab-nginx.sha256` |
 | TP-CLI-02 | Version human + JSON | **have** | app/version fields |
 | TP-CLI-03 | Help Type 0; no CHECKSUM | **have** | test_cli |
-| TP-CLI-04 | About JSON + cache/persistence fields | **have** | cache_preferred / cache_fallback / persistence_storage / effective_storage / storage_dir |
-| TP-CLI-05 | Cache + persistence isolation under HOME | **have** | GLOBAL_BIN + USER_BIN isolate; persistence under `${HOME}/.local/gitlab-nginx` |
+| TP-CLI-04 | About JSON + human cache/persistence labels | **have** | cache_used / cache_preferred / cache_fallback / cache_fallback_2 / persistence_storage / effective_storage; human used, preferred, 1st, 2nd, Persistence storage |
+| TP-CLI-05 | Per-login per-process cache chains under HOME | **have** | Linux shm → tmp → `~/.cache`; Git Bash and Mac chains; silent skip; mode 0700; persistence `${HOME}/.local/gitlab-nginx`; not a ram-drive project leaf |
 | TP-CLI-06 | Unknown command fail-closed | **have** | exit 1 + out_error |
 | TP-CLI-07 | quiet / env -u HOME | **have** | test_cli |
 | TP-CLI-08 | Zero-arg failed install non-zero | **have** | bad SCRIPT_URL + isolate |

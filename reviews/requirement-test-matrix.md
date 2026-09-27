@@ -6,7 +6,7 @@ Maps live `RQ-*` to **TP** families. Status SSOT for individual TP-IDs: `reviews
 |----------------|-----|-------------|-------|-------|
 | `RQ-CLASS-SOFTWARE-DEV` | requirement-class-software-dev | TP-CLI-01 | `tests/test_cli.sh` | Class residual; syntax/companion |
 | `RQ-SHELL-CLI-INTERFACE` | requirement-shell-cli-interface | TP-CLI · TP-GLN-01 | `tests/test_cli.sh` · `tests/test_domain.sh` | Dual mention of domain verbs |
-| `RQ-SHELL-CLI-STORAGE` | requirement-shell-cli-storage | TP-CLI-04,05 | `tests/test_cli.sh` | Cache + persistence folders |
+| `RQ-SHELL-CLI-STORAGE` | requirement-shell-cli-storage | TP-CLI-04,05 | `tests/test_cli.sh` | Per-login per-process cache + persistence storage |
 | `RQ-SHELL-CLI-ZERO-ARGUMENTS` | requirement-shell-cli-zero-arguments | TP-CLI-08 · TP-LC-03 · TP-GLN-04 | CLI + lifecycle + domain | Empty argv ≠ GitLab setup |
 | `RQ-SHELL-OUTPUT-REQUIREMENTS` | requirement-shell-output-requirements | TP-CLI-02,04,07 | `tests/test_cli.sh` | quiet / json |
 | `RQ-SHELL-SELF-MANAGEMENT` | requirement-shell-self-management | TP-LC-04…09 · TP-CLI-09 | lifecycle + CLI | |
@@ -18,4 +18,4 @@ Maps live `RQ-*` to **TP** families. Status SSOT for individual TP-IDs: `reviews
 | `RQ-SHELL-SUDO-COMMAND` | requirement-shell-sudo-command | TP-GLN-07,08,12,13 | `tests/test_domain.sh` | Non-root fail-closed |
 | `RQ-DOMAIN-GITLAB-NGINX` | requirement-domain-gitlab-nginx | TP-GLN-01…13 | `tests/test_domain.sh` | 09–10 optional (host) |
 
-**Last update:** 2026-09-06 (2.5.3)
+**Last update:** 2026-09-27 (2.5.4 cache folder)

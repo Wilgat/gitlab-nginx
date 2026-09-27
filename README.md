@@ -1,6 +1,6 @@
 # gitlab-nginx - GitLab CE with external Nginx and Let's Encrypt
 
-![Version](https://img.shields.io/badge/Version-2.5.3-blue?style=flat-square)
+![Version](https://img.shields.io/badge/Version-2.5.4-blue?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 [![CIAO](https://img.shields.io/badge/Philosophy-CIAO%20(Caution%20%E2%80%A2%20Intentional%20%E2%80%A2%20Anti--fragile%20%E2%80%A2%20Over--engineered)-purple.svg)](https://github.com/cloudgen/ciao)
 [![Stars](https://img.shields.io/github/stars/Wilgat/gitlab-nginx?style=flat-square)](https://github.com/Wilgat/gitlab-nginx)
@@ -100,7 +100,7 @@ gitlab-nginx [command] [options]
 | *(no arguments)* | You | Install or re-check this program |
 | `install` | You (root → global path) | Place the CLI binary |
 | `version` | You | Print version |
-| `about` | You | Diagnostics (install + cache/persistence folders + domain files) |
+| `about` | You | Diagnostics (install, cache folder, persistence storage, domain files) |
 | `help` | You | Full usage |
 | `version-check` | You | Compare local vs channel version |
 | `self-update` | You | Update this program from the channel |
@@ -115,6 +115,8 @@ gitlab-nginx [command] [options]
 **Global options:** `--quiet` / `-q`, `--json`, `--force`, `--debug`, `--no-cloudflare`
 
 **Environment (listed in help):** `REPO_USER`, `REPO_NAME`, `SCRIPT_URL`. `CHECKSUM` is an install-path pin only — not a help/about field.
+
+**Scratch is per login and per process.** `about` prints **Cache folder used**, **preferred**, **1st fallback**, and **2nd fallback** when this computer has one. Linux uses `/dev/shm/cache/cache-gitlab-nginx-<login>-<pid>`, then `/tmp/cache/...`, then `~/.cache/cache-gitlab-nginx-<pid>`. Git Bash uses `/tmp/cache/...`, then `~/AppData/Local/Temp/cache-gitlab-nginx-<pid>`. Mac uses `/tmp/cache/...`, then `~/Library/Caches/cache-gitlab-nginx-<pid>`, then `~/cache/cache-gitlab-nginx-<pid>`. A skipped folder is silent. Durable data for this login stays `~/.local/gitlab-nginx`. On a phone, do not run a downloaded program from the cache folder.
 
 There is **no numbered main menu**. Choose a command name (or a number is not offered).
 
@@ -161,4 +163,4 @@ MIT License. See [LICENSE.md](LICENSE.md).
 
 ## Last Update
 
-2026-09-06 — **2.5.3**: `help` is a single live catalog (`app_help`); `setup` alias listed; stale Java/timer help removed.
+2026-09-27 — **2.5.4**: the cache folder is per login and per process (Linux `/dev/shm/cache/...`, Git Bash and Mac `/tmp/cache/...`). Skipping a folder is silent. `about` prints the folder in use plus the fallbacks. Full history: [`CHANGELOG.md`](./CHANGELOG.md).

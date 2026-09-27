@@ -62,7 +62,7 @@ Optional multi-file layout under `src/` for future authoring **MAY** exist only 
 |--------|----------|---------|-------------------|
 | `out_` | Output system | All user-facing and machine-readable output | `out_text`, `out_info`, `out_success`, `out_json`, `out_die` |
 | `inst_` | Installation & self-management | Install, self-update, self-uninstall, install detect | `inst_perform_install`, `inst_self_update`, `inst_is_installed` |
-| `util_` | General utilities | Reusable helpers (backup, path resolve, cache + persistence) | `util_backup`, `util_resolve_storage`, `util_resolve_persistent_storage`, `util_get_install_bin_path` |
+| `util_` | General utilities | Reusable helpers (backup, path resolve, cache + persistence) | `util_backup`, `util_resolve_storage`, `util_fallback2_cache_dir`, `util_mktemp`, `util_resolve_persistent_storage`, `util_get_install_bin_path` |
 | `app_` | General app CLI surface (product-neutral) | Entry, dispatch, about/help/version presentation | `app_main`, `app_about`, `app_help`, `app_version` |
 | `ver_` | Version comparison | Semantic version handling | `ver_gt`, `ver_check` |
 | `path_` | Shell PATH & environment | PATH manipulation and shell config | `path_add_shell`, `path_add_bashrc` |
@@ -180,7 +180,7 @@ function_name() {
 | `inst_` | `inst_perform_install`, `inst_perform_install_prepare_target`, `inst_perform_install_download_with_checksum`, `inst_perform_install_download_without_checksum`, `inst_perform_install_atomic_install`, `inst_maybe_install`, `inst_self_update`, `inst_self_uninstall` (+ determine_bin / confirm_and_remove / cleanup_path), `inst_is_installed`, `inst_get_version` |
 | `ver_` | `ver_gt`, `ver_check` |
 | `path_` | `path_add_bashrc`, `path_add_zshrc`, `path_add_fish`, `path_add_shell` |
-| `util_` | `util_json_escape`, `util_sha256_file`, `util_fetch_remote_version`, `util_get_install_bin_path`, `util_backup`, `util_resolve_storage` / `util_preferred_cache_dir` / `util_fallback_cache_dir` / `util_persistent_storage_dir` / `util_resolve_persistent_storage` (**wired** from `app_main` / `app_about`; SSOT: `requirement-shell-cli-storage.md`), `util_get_current_shell` |
+| `util_` | `util_json_escape`, `util_sha256_file`, `util_fetch_remote_version`, `util_get_install_bin_path`, `util_backup`, `util_resolve_storage` / `util_preferred_cache_dir` / `util_fallback_cache_dir` / `util_fallback2_cache_dir` / `util_mktemp` / `util_persistent_storage_dir` / `util_resolve_persistent_storage` (**wired** from `app_main` / `app_about`; SSOT: `requirement-shell-cli-storage.md`), `util_get_current_shell` |
 | `prompt_` | `prompt_ask`, `prompt_yes_no` |
 | `app_` | `app_about`, `app_version` (dispatcher routes `version` here), `app_help`, `app_main` |
 

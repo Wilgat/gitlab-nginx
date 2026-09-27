@@ -77,72 +77,123 @@ run_test_cli() {
     assert_contains "about --json type" "$_out" '"type":"about"'
     assert_contains "about --json app" "$_out" '"app":"gitlab-nginx"'
     assert_not_contains "about --json must not include CHECKSUM" "$_out" "CHECKSUM"
-    assert_contains "about --json effective_storage" "$_out" '"effective_storage"'
-    assert_contains "about --json storage_dir" "$_out" '"storage_dir"'
-    assert_contains "about --json cache_preferred" "$_out" '"cache_preferred"'
-    assert_contains "about --json cache_fallback" "$_out" '"cache_fallback"'
-    assert_contains "about --json persistence_storage" "$_out" '"persistence_storage"'
-    assert_contains "about --json storage includes app name" "$_out" "${APP_NAME:-gitlab-nginx}"
+    assert_contains "TP-CLI-04 about --json effective_storage" "$_out" '"effective_storage"'
+    assert_contains "TP-CLI-04 about --json storage_dir" "$_out" '"storage_dir"'
+    assert_contains "TP-CLI-04 about --json cache_used" "$_out" '"cache_used"'
+    assert_contains "TP-CLI-04 about --json cache_preferred" "$_out" '"cache_preferred"'
+    assert_contains "TP-CLI-04 about --json cache_fallback" "$_out" '"cache_fallback"'
+    assert_contains "TP-CLI-04 about --json cache_fallback_2" "$_out" '"cache_fallback_2"'
+    assert_contains "TP-CLI-04 about --json persistence_storage" "$_out" '"persistence_storage"'
+    assert_contains "TP-CLI-04 about --json storage includes app name" "$_out" "${APP_NAME:-gitlab-nginx}"
     _out_h=$(sh "${SCRIPT}" about 2>/dev/null)
-    assert_contains "about human Cache folder (preferred)" "$_out_h" "Cache folder (preferred):"
-    assert_contains "about human Cache folder (fallback)" "$_out_h" "Cache folder (fallback):"
-    assert_contains "about human Persistence folder" "$_out_h" "Persistence folder:"
-    assert_not_contains "about human must not use Storage (effective)" "$_out_h" "Storage (effective)"
-    assert_not_contains "about human must not use Storage (fallback)" "$_out_h" "Storage (fallback)"
+    assert_contains "TP-CLI-04 human Cache folder used" "$_out_h" "Cache folder used:"
+    assert_contains "TP-CLI-04 human Cache folder (preferred)" "$_out_h" "Cache folder (preferred):"
+    assert_contains "TP-CLI-04 human Cache folder (1st fallback)" "$_out_h" "Cache folder (1st fallback):"
+    assert_contains "TP-CLI-04 human Cache folder (2nd fallback)" "$_out_h" "Cache folder (2nd fallback):"
+    assert_contains "TP-CLI-04 human Persistence storage" "$_out_h" "Persistence storage:"
+    assert_not_contains "TP-CLI-04 human must not use Storage (effective)" "$_out_h" "Storage (effective)"
+    assert_not_contains "TP-CLI-04 human must not use Storage (fallback)" "$_out_h" "Storage (fallback)"
 
-    # --- storage resolve isolation (EFFECTIVE_STORAGE_DIR via util_resolve_storage) ---
+    # TP-CLI-05 cache isolation: per login + this process; host chains; silent skip
     ci_isolated_env 2>/dev/null || true
     if [ -n "${CI_HOME:-}" ]; then
+        _login=$(id -un 2>/dev/null || echo "unknown")
         _out=$(HOME="${CI_HOME}" USER_BIN="${CI_USER_BIN:-${CI_HOME}/.local/bin}" \
             sh "${SCRIPT}" --json about 2>/dev/null)
-        assert_contains "isolated about effective_storage has app" "$_out" "${APP_NAME:-gitlab-nginx}"
-        case "$_out" in
-            *'"effective_storage":"'*"${APP_NAME:-gitlab-nginx}"*) t_pass "effective_storage path contains ${APP_NAME:-gitlab-nginx}" ;;
-            *) t_fail "effective_storage missing app isolation in: $_out" ;;
+        assert_contains "TP-CLI-05 isolated about has app in cache" "$_out" "${APP_NAME:-gitlab-nginx}"
+        _pref=$(printf '%s' "$_out" | sed -n 's/.*"cache_preferred":"\([^"]*\)".*/\1/p' | head -n1)
+        _pid="${_pref##*-}"
+        case "${_pref}" in
+            /dev/shm/cache/cache-"${APP_NAME:-gitlab-nginx}"-"${_login}"-[0-9]*)
+                t_pass "TP-CLI-05 cache_preferred is shm login process leaf"
+                ;;
+            *) t_fail "TP-CLI-05 cache_preferred unexpected: '${_pref:-empty}'" ;;
         esac
-        assert_contains "storage_dir field present under isolation" "$_out" '"storage_dir"'
-        assert_contains "isolated about persistence_storage field" "$_out" '"persistence_storage"'
-        case "$_out" in
-            *'"persistence_storage":"'"${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}"'"'*) \
-                t_pass "persistence_storage is ${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}" ;;
-            *) t_fail "persistence_storage missing isolated HOME/.local/app path in: $_out" ;;
-        esac
-        _persist="${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}"
-        if [ -d "$_persist" ]; then
-            t_pass "persistence folder exists after resolve"
-        else
-            t_fail "persistence folder missing: '${_persist}'"
-        fi
-        case "$_persist" in
-            */.local/bin|*/.local/bin/) t_fail "persistence folder must not be USER_BIN" ;;
-            *) t_pass "persistence folder is not USER_BIN" ;;
-        esac
-        _custom="${CI_HOME}/custom-storage-root"
-        _out=$(HOME="${CI_HOME}" STORAGE_DIR="${_custom}" \
-            sh "${SCRIPT}" --json about 2>/dev/null)
-        # STORAGE_DIR env appears on storage_dir config field (tier-3 / override field)
-        assert_contains "storage_dir honors STORAGE_DIR env" "$_out" "custom-storage-root"
+        _fb=$(printf '%s' "$_out" | sed -n 's/.*"cache_fallback":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 cache_fallback 1st" "/tmp/cache/cache-${APP_NAME:-gitlab-nginx}-${_login}-${_pid}" "${_fb}"
+        _fb2=$(printf '%s' "$_out" | sed -n 's/.*"cache_fallback_2":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 cache_fallback 2nd" "${CI_HOME}/.cache/cache-${APP_NAME:-gitlab-nginx}-${_pid}" "${_fb2}"
+        _used=$(printf '%s' "$_out" | sed -n 's/.*"cache_used":"\([^"]*\)".*/\1/p' | head -n1)
         _eff=$(printf '%s' "$_out" | sed -n 's/.*"effective_storage":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 cache_used matches effective" "${_eff}" "${_used}"
+        _sdir=$(printf '%s' "$_out" | sed -n 's/.*"storage_dir":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 storage_dir is 1st fallback" "${_fb}" "${_sdir}"
         if [ -n "$_eff" ] && [ -d "$_eff" ]; then
-            t_pass "effective_storage directory exists after resolve"
+            t_pass "TP-CLI-05 effective cache directory exists"
         else
-            t_fail "effective_storage missing or not a directory: '${_eff:-empty}'"
+            t_fail "TP-CLI-05 effective cache missing: '${_eff:-empty}'"
         fi
-        _who=$(id -un 2>/dev/null || echo "unknown")
+        case "${_eff}" in
+            /dev/shm/"${APP_NAME:-gitlab-nginx}"|/dev/shm/"${APP_NAME:-gitlab-nginx}"-*)
+                t_fail "TP-CLI-05 effective cache must not be ram-drive project shape: '${_eff}'"
+                ;;
+            *) t_pass "TP-CLI-05 effective cache is not a ram-drive project shape" ;;
+        esac
         case "$_out" in
-            *'"effective_storage":"'*"${_who}"*|*'"effective_storage":"'*"unknown"*) \
-                t_pass "effective_storage includes user segment" ;;
-            *) t_fail "effective_storage missing user segment for '${_who}': $_out" ;;
+            *'"effective_storage":"'*"${_login}"*|*'"effective_storage":"'*"unknown"*) \
+                t_pass "TP-CLI-05 effective_storage includes user segment" ;;
+            *) t_fail "TP-CLI-05 effective_storage missing user segment for '${_login}': $_out" ;;
+        esac
+        _err=$(HOME="${CI_HOME}" USER_BIN="${CI_USER_BIN:-${CI_HOME}/.local/bin}" \
+            GITLAB_NGINX_CACHE_SKIP=preferred \
+            sh "${SCRIPT}" about 2>&1 >/dev/null)
+        assert_not_contains "TP-CLI-05 silent cache fallback" "${_err}" "fallback"
+        assert_not_contains "TP-CLI-05 silent cache fallback error" "${_err}" "Cannot create cache"
+        _skip=$(HOME="${CI_HOME}" USER_BIN="${CI_USER_BIN:-${CI_HOME}/.local/bin}" \
+            GITLAB_NGINX_CACHE_SKIP=preferred \
+            sh "${SCRIPT}" --json about 2>/dev/null)
+        _skip_eff=$(printf '%s' "$_skip" | sed -n 's/.*"effective_storage":"\([^"]*\)".*/\1/p' | head -n1)
+        _skip_fb=$(printf '%s' "$_skip" | sed -n 's/.*"cache_fallback":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 skipped preferred uses 1st fallback" "${_skip_fb}" "${_skip_eff}"
+        _gb=$(HOME="${CI_HOME}" GITLAB_NGINX_CACHE_HOST=gitbash \
+            sh "${SCRIPT}" --json about 2>/dev/null)
+        _gb_pref=$(printf '%s' "$_gb" | sed -n 's/.*"cache_preferred":"\([^"]*\)".*/\1/p' | head -n1)
+        _gb_pid="${_gb_pref##*-}"
+        assert_eq "TP-CLI-05 gitbash preferred" "/tmp/cache/cache-${APP_NAME:-gitlab-nginx}-${_login}-${_gb_pid}" "${_gb_pref}"
+        _gb_fb=$(printf '%s' "$_gb" | sed -n 's/.*"cache_fallback":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 gitbash 1st fallback" "${CI_HOME}/AppData/Local/Temp/cache-${APP_NAME:-gitlab-nginx}-${_gb_pid}" "${_gb_fb}"
+        _gb_fb2=$(printf '%s' "$_gb" | sed -n 's/.*"cache_fallback_2":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 gitbash no 2nd fallback" "" "${_gb_fb2}"
+        _mac=$(HOME="${CI_HOME}" GITLAB_NGINX_CACHE_HOST=mac \
+            sh "${SCRIPT}" --json about 2>/dev/null)
+        _mac_pref=$(printf '%s' "$_mac" | sed -n 's/.*"cache_preferred":"\([^"]*\)".*/\1/p' | head -n1)
+        _mac_pid="${_mac_pref##*-}"
+        assert_eq "TP-CLI-05 mac preferred" "/tmp/cache/cache-${APP_NAME:-gitlab-nginx}-${_login}-${_mac_pid}" "${_mac_pref}"
+        _mac_fb=$(printf '%s' "$_mac" | sed -n 's/.*"cache_fallback":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 mac 1st fallback" "${CI_HOME}/Library/Caches/cache-${APP_NAME:-gitlab-nginx}-${_mac_pid}" "${_mac_fb}"
+        _mac_fb2=$(printf '%s' "$_mac" | sed -n 's/.*"cache_fallback_2":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 mac 2nd fallback" "${CI_HOME}/cache/cache-${APP_NAME:-gitlab-nginx}-${_mac_pid}" "${_mac_fb2}"
+        _mode=$(stat -c %a "${_eff}" 2>/dev/null || echo "")
+        assert_eq "TP-CLI-05 effective cache mode 0700" "700" "${_mode}"
+        _hum_l=$(HOME="${CI_HOME}" sh "${SCRIPT}" about 2>/dev/null)
+        assert_contains "TP-CLI-05 linux about used" "${_hum_l}" "Cache folder used:"
+        assert_contains "TP-CLI-05 linux about preferred path" "${_hum_l}" "/dev/shm/cache/cache-${APP_NAME:-gitlab-nginx}-${_login}-"
+        assert_contains "TP-CLI-05 linux about 2nd path" "${_hum_l}" "/.cache/cache-${APP_NAME:-gitlab-nginx}-"
+        _hum_gb=$(HOME="${CI_HOME}" GITLAB_NGINX_CACHE_HOST=gitbash sh "${SCRIPT}" about 2>/dev/null)
+        assert_contains "TP-CLI-05 gitbash about 1st" "${_hum_gb}" "AppData/Local/Temp/cache-${APP_NAME:-gitlab-nginx}-"
+        assert_not_contains "TP-CLI-05 gitbash about omits 2nd" "${_hum_gb}" "Cache folder (2nd fallback)"
+        _hum_mac=$(HOME="${CI_HOME}" GITLAB_NGINX_CACHE_HOST=mac sh "${SCRIPT}" about 2>/dev/null)
+        assert_contains "TP-CLI-05 mac about 1st" "${_hum_mac}" "Library/Caches/cache-${APP_NAME:-gitlab-nginx}-"
+        assert_contains "TP-CLI-05 mac about 2nd path" "${_hum_mac}" "Cache folder (2nd fallback): ${CI_HOME}/cache/cache-${APP_NAME:-gitlab-nginx}-"
+        _persist=$(printf '%s' "$_out" | sed -n 's/.*"persistence_storage":"\([^"]*\)".*/\1/p' | head -n1)
+        assert_eq "TP-CLI-05 persistence_storage path" "${CI_HOME}/.local/${APP_NAME:-gitlab-nginx}" "$_persist"
+        if [ -n "$_persist" ] && [ -d "$_persist" ]; then
+            t_pass "TP-CLI-05 persistence storage directory exists"
+        else
+            t_fail "TP-CLI-05 persistence storage missing: '${_persist:-empty}'"
+        fi
+        case "${_persist}" in
+            */.local/bin|*/.local/bin/) t_fail "TP-CLI-05 persistence must not be USER_BIN: '${_persist}'" ;;
+            *) t_pass "TP-CLI-05 persistence is not the install bin directory" ;;
         esac
         ci_cleanup_env 2>/dev/null || true
     else
-        # Fallback without full CI isolation helpers
         _out=$(sh "${SCRIPT}" --json about 2>/dev/null)
         _eff=$(printf '%s' "$_out" | sed -n 's/.*"effective_storage":"\([^"]*\)".*/\1/p' | head -n1)
         if [ -n "$_eff" ] && [ -d "$_eff" ]; then
-            t_pass "effective_storage directory exists after resolve"
+            t_pass "TP-CLI-05 effective_storage directory exists after resolve"
         else
-            t_fail "effective_storage missing or not a directory: '${_eff:-empty}'"
+            t_fail "TP-CLI-05 effective_storage missing or not a directory: '${_eff:-empty}'"
         fi
     fi
 

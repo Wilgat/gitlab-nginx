@@ -21,7 +21,7 @@ It owns the **four domain pillars**:
 | Peer | Requirement-ID | Owns |
 |------|----------------|------|
 | CLI interface | **RQ-SHELL-CLI-INTERFACE** | Dispatch, empty argv Type O, help routing |
-| Shell CLI storage | **RQ-SHELL-CLI-STORAGE** | Cache folder + persistence folder resolve, isolation, about storage fields |
+| Shell CLI storage | **RQ-SHELL-CLI-STORAGE** | Cache folder + persistence storage resolve, isolation, about storage fields |
 | Output | **RQ-SHELL-OUTPUT-REQUIREMENTS** | `out_*` channels (domain may use thin shims to `out_*`) |
 
 **Scope:** Domain command surface, host setup semantics, persistence paths, human/JSON domain contracts, help/about domain rows.  
@@ -149,7 +149,7 @@ Plus full Type 0 self-management table.
 - email file path + email (if known)  
 - useful domain command reminders  
 
-CLI lifecycle fields (version, install path, channel, cache folder, persistence folder) remain required by shell law.
+CLI lifecycle fields (version, install path, channel, cache folder, persistence storage) remain required by shell law.
 
 ---
 
